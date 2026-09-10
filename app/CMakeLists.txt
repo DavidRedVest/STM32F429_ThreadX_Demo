@@ -1,5 +1,11 @@
 add_library(app STATIC)
 file(GLOB APP_SOURCE "src/*.c")
+if(NOT APP_SOURCE)
+    # app 尚未移植，占位空文件让空库先能配置/链接通过
+    set(APP_STUB "${CMAKE_CURRENT_BINARY_DIR}/app_stub.c")
+    file(WRITE "${APP_STUB}" "")
+    list(APPEND APP_SOURCE "${APP_STUB}")
+endif()
 target_sources(app PRIVATE ${APP_SOURCE})
 target_include_directories(app PUBLIC inc)
-target_link_libraries(app PUBLIC bap threadx stm32_muc_flags)
+target_link_libraries(app PUBLIC bsp threadx stm32_mcu_flags)

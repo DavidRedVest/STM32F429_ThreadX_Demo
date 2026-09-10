@@ -14,16 +14,17 @@ set(MCU_FLAGS
 )
 
 # 接口库：集中管理全局通用编译与链接参数
-add_library(stm32_muc_flags INTERFACE)
-target_compile_options(stm32_mcu_flags INTERFACE 
-    $(MCU_FLAGS)
-    -Wall 
-    -Wextra 
-    -fdata-sections 
-    -ffunction-se
-    
-# 引入链接脚本 
-set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/STM32F429IGTx_FLASH.ld")
+add_library(stm32_mcu_flags INTERFACE)
+target_compile_options(stm32_mcu_flags INTERFACE
+    ${MCU_FLAGS}
+    -Wall
+    -Wextra
+    -fdata-sections
+    -ffunction-sections
+)
+
+# 引入链接脚本
+set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/STM32F429IGT6_FLASH.ld")
 target_link_options(stm32_mcu_flags INTERFACE
     ${MCU_FLAGS}
     -T${LINKER_SCRIPT}
@@ -33,15 +34,20 @@ target_link_options(stm32_mcu_flags INTERFACE
     -specs=nosys.specs 
 )
 
-# 递归包含各模块子目录 
+# 递归包含各模块子目录
 add_subdirectory(drivers)
 add_subdirectory(bsp)
-add_subdirectory(middleeares/threadx)
+add_subdirectory(middlewares/threadx)
 add_subdirectory(app)
 add_subdirectory(core)
 
 # 生成可执行目标（ELF）
-add_executable(${CMAKE_PROJECT_NAME})
+# add_executable 自身不持有源码（main 等真正代码来自 core 等静态库），
+# 但 CMake 要求可执行目标至少有一个源文件，故用空文件占位。
+set(EXE_STUB "${CMAKE_CURRENT_BINARY_DIR}/exe_stub.c")
+file(WRITE "${EXE_STUB}" "")
+add_executable(${CMAKE_PROJECT_NAME} "${EXE_STUB}")
+set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES LINKER_LANGUAGE C)
 
 # 链接各个解耦模块 
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
@@ -58,5 +64,5 @@ add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_PROJECT_NAME}.hex
     COMMAND ${CMAKE_OBJCOPY} -O binary -S $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_PROJECT_NAME}.bin 
     COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
-    COMMAND "Building Hex/Bin and printing firmware size"
+    COMMENT "Building Hex/Bin and printing firmware size"
 )

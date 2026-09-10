@@ -4,7 +4,7 @@ set(CMAKE_SYSTEM_PROCESSOR arm)
 # 确保 CMake  不尝试链接可执行文件来测试编译器
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-set(TOOLCHAIN_PREFIX arm-none-eabe-)
+set(TOOLCHAIN_PREFIX arm-none-eabi-)
 
 set(CMAKE_C_COMPILER        ${TOOLCHAIN_PREFIX}gcc)
 set(CMAKE_CXX_COMPILER      ${TOOLCHAIN_PREFIX}g++)
