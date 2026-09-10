@@ -52,17 +52,21 @@ file(WRITE "${EXE_STUB}" "")
 add_executable(${CMAKE_PROJECT_NAME} "${EXE_STUB}")
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES LINKER_LANGUAGE C)
 
-# --whole-archive on core: startup.o's weak vector-table aliases (SysTick_Handler
-# etc. -> Default_Handler) already satisfy the vector table by themselves, so the
-# linker never has a reason to pull in stm32f4xx_it.o's strong overrides from the
-# same core.a — the real handlers (e.g. HAL_IncTick()) silently never link in.
+# --whole-archive on bsp/core: each has two objects defining the same symbol
+# (weak in one, strong in the other) — core's startup.o vs stm32f4xx_it.o for
+# SysTick_Handler etc., bsp's kservice.c vs rt_vsnprintf.c for rt_vsnprintf.
+# Once the weak definition's own object is pulled in for some other symbol, its
+# internal call already satisfies the reference, so the linker never has a
+# reason to also pull in the strong override from the same archive — it just
+# silently stays weak. Force every member object into the link so ELF's
+# strong-beats-weak rule can actually kick in.
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
     stm32_mcu_flags
     app
-    bsp
     threadx
     drivers
     -Wl,--whole-archive
+    bsp
     core
     -Wl,--no-whole-archive
 )
