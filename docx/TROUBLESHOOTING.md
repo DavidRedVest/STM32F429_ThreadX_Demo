@@ -246,7 +246,78 @@ arm-none-eabi-nm build/stm32f429_firmware.elf | grep -i "rt_vsnprintf\b|print_fl
 
 ---
 
-## 小结：这个项目里"静态库 + 弱符号别名"是一个反复出现的坑
+## 问题三：串口打印数据乱码
+
+### 现象
+
+串口初始化（`my_uart_init(115200)`）和 `rt_kprintf` 都已经能正常编译链接（见问题二），USB-TTL 接到 PC 上，串口终端设置成 115200 8N1（和代码里 `huart1.Init.BaudRate=115200`、`WordLength=UART_WORDLENGTH_8B`、`Parity=UART_PARITY_NONE`、`StopBits=UART_STOPBITS_1` 完全一致），但收到的数据是完全随机的乱码，没有任何规律。
+
+### 排查过程
+
+先排除了两类最容易想到的原因：
+
+- **链接期弱/强符号覆盖问题**（问题一、问题二踩过的坑）：用 `arm-none-eabi-nm`/`objdump` 验证 `HAL_UART_MspInit` 确实链接成了 `bsp_uart.c` 里真正配置 GPIO/RCC 的强版本，不是 HAL 库里那个空的弱默认实现，排除。
+- **终端参数不匹配**：确认过终端侧波特率/数据位/校验位/停止位都和代码一致，排除。
+
+串口"乱码"（而不是完全收不到数据）是很典型的**波特率系统性偏差**的表现：PC 和 MCU 对每个 bit 的采样时刻错位，导致收到的字节值完全对不上，但通信本身（起始位、电平）是正常的。
+
+USART 的波特率分频值是 HAL 在 `HAL_UART_Init()` 里根据 `HAL_RCC_GetPCLK2Freq()` 现场算出来的，而这个函数最终依赖的是 `core/inc/stm32f4xx_hal_conf.h` 里的编译期宏 `HSE_VALUE`——软件没有办法在运行时"测量"外部晶振的真实频率，只能相信这个宏里写的值。
+
+进一步检查 `core/src/main.c` 的 `SystemClock_Config()`：
+
+```c
+RCC_OscInitStructure.PLL.PLLM = 25;   // 主 PLL 分频系数
+RCC_OscInitStructure.PLL.PLLN = 360;
+RCC_OscInitStructure.PLL.PLLP = 2;
+```
+
+`PLLM = 25` 这个取值本身就很反常——PLL 输入频率的标准做法是把 HSE 分频到 1MHz（这样 VCO 倍频系数、环路稳定性等参数手册上的推荐值才对得上）。如果 HSE 真的是模板默认注释写的 8MHz，`PLLM` 应该配成 `8`（8MHz / 8 = 1MHz）才对；而 `PLLM = 25` 恰好只有在 HSE = **25MHz** 时才能让 PLL 输入落在 1MHz（25MHz / 25 = 1MHz）。也就是说，这份 `SystemClock_Config()` 的 PLL 参数从一开始就是照着 25MHz 晶振配的，只是 `stm32f4xx_hal_conf.h` 里的 `HSE_VALUE` 宏没有跟着改，还留着 ST 官方模板的默认值 `8000000U`。
+
+### 根本原因
+
+`core/inc/stm32f4xx_hal_conf.h` 里：
+
+```c
+#define HSE_VALUE    (8000000U)
+```
+
+这个值和板子上真实焊接的 25MHz 晶振不匹配。`HAL_RCC_GetSysClockFreq()`（进而 `SystemCoreClock`、`HAL_RCC_GetPCLK2Freq()`）都是拿这个宏参与计算的：
+
+- 软件"以为"的 SYSCLK = `(HSE_VALUE / PLLM) * PLLN / PLLP` = `(8MHz / 25) * 360 / 2` ≈ 57.6MHz；
+- 硬件实际跑的 SYSCLK（因为真实晶振是 25MHz）= `(25MHz / 25) * 360 / 2` = 180MHz。
+
+两者相差整整 `180 / 57.6 = 3.125` 倍。USART 的波特率分频值是按"软件以为的" 57.6MHz 对应的 PCLK2 算出来的，而 UART 外设实际是按真实的 180MHz 对应时钟在收发——分频系数和实际时钟不匹配，收发双方对每个 bit 的采样时刻完全对不上，表现为收到的字节是随机乱码。
+
+（这个 3.125 倍的偏差同时也会影响 `HAL_Delay()`：`HAL_InitTick()` 配置 SysTick 重装载值时用的也是这个偏低的 `SystemCoreClock`，实际 1ms 节拍会被压缩成约 0.32ms，`HAL_Delay(500)` 实际只会延时约 160ms——只是这个偏差不像串口乱码那么容易一眼看出来，闪灯节奏"看起来快了一点"很容易被忽略过去。）
+
+### 解决方案
+
+把 `HSE_VALUE` 改成板子上真实的晶振频率：
+
+```c
+#if !defined  (HSE_VALUE)
+  #define HSE_VALUE    (25000000U) /*!< 这块板子的 HSE 晶振是 25MHz，不是 ST 模板默认的 8MHz */
+#endif /* HSE_VALUE */
+```
+
+同时把 `SystemClock_Config()` 函数头上那段早就过时的说明注释（`HSE Frequency(Hz) = 8000000`、`PLL_M = 8`、`PLL_Q = 7`，这几个值和实际代码里的 `PLLM=25`/`PLLQ=8` 本来就不一致，是模板遗留下来一直没同步的旧注释）一并改成和实际代码一致的数值，避免继续误导后面看代码的人。
+
+### 验证方法
+
+这类"时钟假设和真实晶振不匹配"的问题，没法只靠看代码/看编译结果判断对不对，必须上真实硬件观察：
+
+- 串口能收到正常字符（不再是乱码）；
+- 如果之前怀疑过闪灯节奏，同时确认 LED 闪烁间隔是不是也变成了肉眼可辨的、均匀的约 1 次/秒（如果之前偏快，修完应该会明显变慢、变准）。
+
+由于这个偏差是一个固定的乘法系数（本例是 3.125 倍），任何一个使用 `HAL_Delay`/`HAL_GetTick` 做定时、或任何用 HAL 波特率计算公式配置的外设（UART、SPI 等有波特率概念的），在修复前都会一起跟着错、修复后应该一起恢复正常——如果只有串口正常但延时还是不对（或者反过来），说明还有别的独立问题，不能都归因到 `HSE_VALUE` 上。
+
+### 举一反三：以后拿到一块新板子/新模板，先确认这两个数字对不对
+
+以后换板子、或者直接照抄别的项目模板时，`HSE_VALUE`（`stm32f4xx_hal_conf.h`）和 `SystemClock_Config()` 里的 `PLLM`（及其他 PLL 分频系数）必须按板子上**实际**焊的晶振频率成对修改，两者要能对上"PLL 输入 = HSE / PLLM ≈ 1MHz"这条经验规律。只改了 PLL 参数、忘了改 `HSE_VALUE`（或反过来），代码能正常编译、时钟也能正常起振运行，不会有任何报错，但所有依赖 HAL 时钟计算的功能（延时、串口、任何算波特率/周期的外设）都会跟着系统性地跑偏——这是一类"编译和启动都正常，但所有时间/速率相关的东西都不对"的问题，排查时应该优先怀疑这里。
+
+---
+
+## 小结（问题一、二）：这个项目里"静态库 + 弱符号别名"是一个反复出现的坑
 
 问题一和问题二根因完全一样，只是出现在不同的模块（`core` 和 `bsp`）、覆盖的是不同的符号（`SysTick_Handler` 和 `rt_vsnprintf`）。触发条件都是：
 
