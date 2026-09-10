@@ -18,9 +18,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "bsp_led.h"
-#include "rtthread.h"
-#include "bsp_uart.h"
+#include "app.h"
 
 
 /** @addtogroup STM32F4xx_HAL_Examples
@@ -48,8 +46,6 @@ static void Error_Handler(void);
  */
 int main(void)
 {
-    int serial1 = 123456789;
-    double serial2 = 123456789.123456789;
   /* STM32F4xx HAL library initialization:
        - Configure the Flash prefetch, Flash preread and Buffer caches
        - Systick timer is configured by default as source of time base, but user
@@ -64,25 +60,12 @@ int main(void)
   /* Configure the System clock to 180 MHz */
   SystemClock_Config();
 
-  /* Add your application code here
-   */
-  led_init();
-  my_uart_init(115200);
-
-  rt_kprintf("%x\r\n",0x1234);
-  rt_kprintf("Hello RT-Thread:%ld \r\n", serial1);
-  rt_kprintf("Test Float:%lf \r\n", serial2);
+  app_init();
 
   /* Infinite loop */
   while (1)
   {
-    HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_0);
-    HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_1);
-    HAL_Delay(500);
-   // HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-   // HAL_Delay(500);
-   // HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-   // HAL_Delay(500);
+    app_task();
   }
 }
 
@@ -129,13 +112,11 @@ static void SystemClock_Config(void)
   ret = HAL_RCC_OscConfig(&RCC_OscInitStructure);               // 初始化
 
   if (ret != HAL_OK)
-    while (1)
-      ;
+    Error_Handler();
 
   ret = HAL_PWREx_EnableOverDrive(); // 开启Over-Driver功能
   if (ret != HAL_OK)
-    while (1)
-      ;
+    Error_Handler();
 
   // 选中PLL作为系统时钟源并且配置HCLK,PCLK1和PCLK2
   RCC_ClkInitStructure.ClockType = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2);
@@ -146,8 +127,7 @@ static void SystemClock_Config(void)
   ret = HAL_RCC_ClockConfig(&RCC_ClkInitStructure, FLASH_LATENCY_5); // 同时设置FLASH延时周期为5WS，也就是6个CPU周期。
 
   if (ret != HAL_OK)
-    while (1)
-      ;
+    Error_Handler();
 }
 
 /**
