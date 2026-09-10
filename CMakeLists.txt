@@ -5,6 +5,9 @@ set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/arm-none-eabi.cmake"
 
 project(stm32f429_firmware C CXX ASM)
 
+# 生成 compile_commands.json，供 VSCode clangd 插件做跳转/补全用
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # 全局架构与编译选项
 set(MCU_FLAGS
     -mcpu=cortex-m4
@@ -49,14 +52,19 @@ file(WRITE "${EXE_STUB}" "")
 add_executable(${CMAKE_PROJECT_NAME} "${EXE_STUB}")
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES LINKER_LANGUAGE C)
 
-# 链接各个解耦模块 
+# --whole-archive on core: startup.o's weak vector-table aliases (SysTick_Handler
+# etc. -> Default_Handler) already satisfy the vector table by themselves, so the
+# linker never has a reason to pull in stm32f4xx_it.o's strong overrides from the
+# same core.a — the real handlers (e.g. HAL_IncTick()) silently never link in.
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
     stm32_mcu_flags
-    app 
-    bsp 
-    threadx 
-    drivers 
-    core 
+    app
+    bsp
+    threadx
+    drivers
+    -Wl,--whole-archive
+    core
+    -Wl,--no-whole-archive
 )
 
 # 编译后生成 .bin .hex 与内存占用统计 
