@@ -57,7 +57,7 @@ int main(void)
      */
   HAL_Init();
 
-  /* Configure the System clock to 180 MHz */
+  /* Configure the System clock to 168 MHz (see SystemClock_Config() below for why 168 not 180) */
   SystemClock_Config();
 
   app_init();
@@ -73,19 +73,26 @@ int main(void)
  * @brief  System Clock Configuration
  *         The system Clock is configured as follow :
  *            System Clock source            = PLL (HSE)
- *            SYSCLK(Hz)                     = 180000000
- *            HCLK(Hz)                       = 180000000
+ *            SYSCLK(Hz)                     = 168000000
+ *            HCLK(Hz)                       = 168000000
  *            AHB Prescaler                  = 1
  *            APB1 Prescaler                 = 4
  *            APB2 Prescaler                 = 2
  *            HSE Frequency(Hz)              = 25000000
  *            PLL_M                          = 25
- *            PLL_N                          = 360
+ *            PLL_N                          = 336
  *            PLL_P                          = 2
- *            PLL_Q                          = 8
+ *            PLL_Q                          = 7
  *            VDD(V)                         = 3.3
  *            Main regulator output voltage  = Scale1 mode
  *            Flash Latency(WS)              = 5
+ * @note   168MHz (not the F429's max 180MHz) is deliberate: CK48M (feeding USB OTG FS/SDIO/RNG)
+ *         is hardwired to the main PLL's Q output on this chip — STM32F429/439 has no PLLSAI path
+ *         to CK48M (that CK48MSEL mux only exists on STM32F469/479, see
+ *         drivers/inc/stm32f4xx_hal_rcc_ex.h's RCC_CLK48CLKSOURCE_PLLSAIP guard). VCO = 336MHz
+ *         (HSE/PLLM*PLLN = 25/25*336) divides evenly by PLLQ=7 for an exact 48MHz, which VCO=360MHz
+ *         (the 180MHz config) cannot do with any integer PLLQ (360/48 = 7.5). See
+ *         docx/TROUBLESHOOTING.md for the full writeup.
  * @param  None
  * @retval None
  */
@@ -106,15 +113,15 @@ static void SystemClock_Config(void)
   RCC_OscInitStructure.PLL.PLLState = RCC_PLL_ON;               // 打开PLL
   RCC_OscInitStructure.PLL.PLLSource = RCC_PLLSOURCE_HSE;       // PLL时钟源选择HSE
   RCC_OscInitStructure.PLL.PLLM = 25;                           // 主PLL和音频PLL分频系数(PLL之前的分频),取值范围:2~63.
-  RCC_OscInitStructure.PLL.PLLN = 360;                          // 主PLL倍频系数(PLL倍频),取值范围:64~432.
+  RCC_OscInitStructure.PLL.PLLN = 336;                          // 主PLL倍频系数(PLL倍频),取值范围:64~432. (336 而不是 360，为了让 PLLQ 能整除出精确 48MHz)
   RCC_OscInitStructure.PLL.PLLP = 2;                            // 系统时钟的主PLL分频系数(PLL之后的分频),取值范围:2,4,6,8.(仅限这4个值!)
-  RCC_OscInitStructure.PLL.PLLQ = 8;                            // USB/SDIO/随机数产生器等的主PLL分频系数(PLL之后的分频),取值范围:2~15.
+  RCC_OscInitStructure.PLL.PLLQ = 7;                            // USB/SDIO/随机数产生器等的主PLL分频系数(PLL之后的分频),取值范围:2~15. 336/7=48MHz，标准值
   ret = HAL_RCC_OscConfig(&RCC_OscInitStructure);               // 初始化
 
   if (ret != HAL_OK)
     Error_Handler();
 
-  ret = HAL_PWREx_EnableOverDrive(); // 开启Over-Driver功能
+  ret = HAL_PWREx_EnableOverDrive(); // 开启Over-Driver功能 (168MHz本身不强制需要，但开着无害，>168MHz时才是必须的)
   if (ret != HAL_OK)
     Error_Handler();
 
