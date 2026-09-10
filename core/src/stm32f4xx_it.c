@@ -132,6 +132,12 @@ void PendSV_Handler(void)
 
 /**
   * @brief  This function handles SysTick Handler.
+  * @note   Dead code for now: stm32f4xx_hal_timebase_tim.c moved the HAL tick
+  *         to TIM6, so SysTick's interrupt is never enabled and this never
+  *         runs. ThreadX's own Cortex-M4 port defines its own SysTick_Handler
+  *         for the RTOS tick, so delete this one when middlewares/threadx
+  *         gets real sources — leaving both would be a duplicate-symbol link
+  *         error (OBJECT libraries no longer let a stray weak alias mask it).
   * @param  None
   * @retval None
   */
