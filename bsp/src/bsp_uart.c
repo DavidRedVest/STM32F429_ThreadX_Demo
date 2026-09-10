@@ -10,22 +10,6 @@ T_UART_Handle g_tUART1_Handle = {0};
 
 
 
-void uart_init(u32 bound)
-{	
-	//UART 初始化设置
-	huart1.Instance=USART1;					    //USART1
-	huart1.Init.BaudRate=bound;				    //波特率
-	huart1.Init.WordLength=UART_WORDLENGTH_8B;   //字长为8位数据格式
-	huart1.Init.StopBits=UART_STOPBITS_1;	    //一个停止位
-	huart1.Init.Parity=UART_PARITY_NONE;		    //无奇偶校验位
-	huart1.Init.HwFlowCtl=UART_HWCONTROL_NONE;   //无硬件流控
-	huart1.Init.Mode=UART_MODE_TX_RX;		    //收发模式
-	HAL_UART_Init(&huart1);					    //HAL_UART_Init()会使能UART1
-	
-//	HAL_UART_Receive_IT(&UART1_Handler, (u8 *)aRxBuffer, RXBUFFERSIZE);//该函数会开启接收中断：标志位UART_IT_RXNE，并且设置接收缓冲以及接收缓冲接收最大数据量
-  
-}
-
 void HAL_UART_MspInit(UART_HandleTypeDef *huart)
 {
     //GPIO端口设置
@@ -117,7 +101,7 @@ void USART1_IRQHandler(void)
 	uint8_t u8UartData;
 	if( ( __HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE) != RESET ) && ( __HAL_UART_GET_IT_SOURCE(&huart1, UART_IT_RXNE) != RESET ) )
 	{
-		HAL_UART_Receive(&huart1, &u8UartData, 1, 1000 );
+		u8UartData = (uint8_t)(huart1.Instance->DR & 0xFF);	//直接读DR，读DR会自动清RXNE，不用阻塞等HAL_UART_Receive
 		if( 0 == (g_tUART1_Handle.u16Uart_Rx_Sta & 0x8000) )	//接收未完成
 		{
 			if( g_tUART1_Handle.u16Uart_Rx_Sta & 0x4000 )	//接收到了0x0d

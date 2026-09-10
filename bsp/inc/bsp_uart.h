@@ -31,7 +31,6 @@ extern UART_HandleTypeDef huart1;
 //#define RXBUFFERSIZE   1 //缓存大小
 
 
-void uart_init(u32 bound);
 void HAL_UART_MspInit(UART_HandleTypeDef *huart);
 
 
