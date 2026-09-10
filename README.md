@@ -1,5 +1,7 @@
 
 
+
+
 工程目录结构示意图如下：
 
 ```text
@@ -9,24 +11,27 @@ stm32f429_template/
 │   ├── arm-none-eabi.cmake     # 交叉编译工具链定义（Toolchain File）
 │   └── STM32F429IGTx_FLASH.ld  # 链接脚本（推荐集中放置在 cmake/ 目录下）
 │
-├── Drivers/
+├── drivers/
 │   ├── CMakeLists.txt          # [可选] Drivers 子模块构建脚本（生成 DriversTarget 静态库/接口）
-│   ├── CMSIS/
-│   └── STM32F4xx_HAL_Driver/
-├── BSP/
+│   ├── src/
+│   ├── inc/
+│		└── cminc/
+├── bsp/
 │   ├── CMakeLists.txt          # [可选] BSP 子模块构建脚本
-│   ├── Inc/
-│   └── Src/
-├── Middlewares/
-│   └── ThreadX/
+│   ├── inc/
+│   └── src/
+├── middlewares/
+│   └── threadx/
 │       └── CMakeLists.txt      # ThreadX 内核构建脚本
-├── App/
+├── app/
 │   ├── CMakeLists.txt          # [可选] App 业务逻辑构建脚本
-│   ├── Inc/
-│   └── Src/
-└── Core/
-    ├── Inc/
-    └── Src/
+│   ├── inc/
+│   └── src/
+└── core/
+		├── CMakeLists.txt
+    ├── inc/
+    └── src/
+ 
 
 ```
 
