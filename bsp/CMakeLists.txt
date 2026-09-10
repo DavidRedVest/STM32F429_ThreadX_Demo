@@ -1,4 +1,4 @@
-add_library(bsp STATIC)
+add_library(bsp OBJECT)
 
 file(GLOB BSP_SOURCE "src/*.c")
 if(NOT BSP_SOURCE)

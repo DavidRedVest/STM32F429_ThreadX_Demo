@@ -45,30 +45,25 @@ add_subdirectory(app)
 add_subdirectory(core)
 
 # 生成可执行目标（ELF）
-# add_executable 自身不持有源码（main 等真正代码来自 core 等静态库），
+# add_executable 自身不持有源码（main 等真正代码来自 core 等 OBJECT 库），
 # 但 CMake 要求可执行目标至少有一个源文件，故用空文件占位。
 set(EXE_STUB "${CMAKE_CURRENT_BINARY_DIR}/exe_stub.c")
 file(WRITE "${EXE_STUB}" "")
 add_executable(${CMAKE_PROJECT_NAME} "${EXE_STUB}")
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES LINKER_LANGUAGE C)
 
-# --whole-archive on bsp/core: each has two objects defining the same symbol
-# (weak in one, strong in the other) — core's startup.o vs stm32f4xx_it.o for
-# SysTick_Handler etc., bsp's kservice.c vs rt_vsnprintf.c for rt_vsnprintf.
-# Once the weak definition's own object is pulled in for some other symbol, its
-# internal call already satisfies the reference, so the linker never has a
-# reason to also pull in the strong override from the same archive — it just
-# silently stays weak. Force every member object into the link so ELF's
-# strong-beats-weak rule can actually kick in.
+# app/bsp/threadx/drivers/core are all OBJECT libraries (not STATIC), so every
+# one of their object files always lands in the final link unconditionally —
+# no archive extraction, no risk of a weak definition (e.g. a vector-table
+# alias) silently shadowing a strong override that lives in a different
+# source file of the same module (see docx/TROUBLESHOOTING.md, problems 1-2).
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
     stm32_mcu_flags
     app
     threadx
     drivers
-    -Wl,--whole-archive
     bsp
     core
-    -Wl,--no-whole-archive
 )
 
 # 编译后生成 .bin .hex 与内存占用统计 

@@ -1,4 +1,4 @@
-add_library(core STATIC)
+add_library(core OBJECT)
 file(GLOB CORE_SOURCES "src/*.c" "src/*.S")
 target_sources(core PRIVATE ${CORE_SOURCES})
 target_include_directories(core PUBLIC inc)

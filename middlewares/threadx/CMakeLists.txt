@@ -1,4 +1,4 @@
-add_library(threadx STATIC)
+add_library(threadx OBJECT)
 
 # 收集 ThreadX 内核通用源码与 Cortex-M4 GNU 汇编
 file(GLOB TX_COMMON_SOURCES "common/src/*.c")

@@ -1,4 +1,4 @@
-add_library(drivers STATIC)
+add_library(drivers OBJECT)
 
 # 收集 HAL 驱动代码
 file(GLOB HAL_SOURCES "src/*.c")

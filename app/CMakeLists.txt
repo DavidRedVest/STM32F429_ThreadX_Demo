@@ -1,4 +1,4 @@
-add_library(app STATIC)
+add_library(app OBJECT)
 file(GLOB APP_SOURCE "src/*.c")
 if(NOT APP_SOURCE)
     # app 尚未移植，占位空文件让空库先能配置/链接通过
