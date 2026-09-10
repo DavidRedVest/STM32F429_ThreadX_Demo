@@ -315,6 +315,20 @@ RCC_OscInitStructure.PLL.PLLP = 2;
 
 以后换板子、或者直接照抄别的项目模板时，`HSE_VALUE`（`stm32f4xx_hal_conf.h`）和 `SystemClock_Config()` 里的 `PLLM`（及其他 PLL 分频系数）必须按板子上**实际**焊的晶振频率成对修改，两者要能对上"PLL 输入 = HSE / PLLM ≈ 1MHz"这条经验规律。只改了 PLL 参数、忘了改 `HSE_VALUE`（或反过来），代码能正常编译、时钟也能正常起振运行，不会有任何报错，但所有依赖 HAL 时钟计算的功能（延时、串口、任何算波特率/周期的外设）都会跟着系统性地跑偏——这是一类"编译和启动都正常，但所有时间/速率相关的东西都不对"的问题，排查时应该优先怀疑这里。
 
+### 问题三的后续（2026-09-11）：想要精确 48MHz，主频从 180MHz 降到了 168MHz
+
+`HSE_VALUE` 修好之后，`PLLQ=8` 给 USB/SDIO/RNG 用的 `CK48M` 时钟实际是 `360MHz / 8 = 45MHz`，不是标准的 48MHz（当时只是为了让 UART 波特率算对，没特别管这个）。回头想优化成精确 48MHz 时，一开始想的方案是：主频继续保持 180MHz，另外配一个独立的 PLLSAI 专门出精确的 48MHz——这在很多 STM32 型号（比如 STM32F469/F479）上是标准做法。
+
+但查完 `drivers/inc/stm32f4xx_hal_rcc_ex.h` 才发现，**这条路在 STM32F429/439 上根本不存在**：`RCC_CLK48CLKSOURCE_PLLSAIP` 这个宏、以及 `RCC_PeriphCLKInitTypeDef` 里的 `Clk48ClockSelection` 字段，头文件里明确写着只在 `#if defined(STM32F469xx) || defined(STM32F479xx)` 才有效；`STM32F429xx`/`STM32F439xx` 分支下的 `RCC_PLLSAIInitTypeDef` 甚至连 `PLLSAIP` 这个字段都没有（只有 N/Q/R，分别给音频 SAI 和 LCD-TFT 用）。也就是说 STM32F429 这颗芯片物理上就没有"PLLSAI 接到 48MHz 外设时钟"这条电路，`CK48M` 只能来自主 PLL 的 `Q` 输出，没有第二个源可选——这是芯片本身的限制，不是 HAL 没封装全。
+
+数学上也证实了"180MHz + 精确48MHz"这个组合本来就凑不出来：主 PLL 的 VCO = `HSE/PLLM*PLLN`，要 `SYSCLK=VCO/PLLP=180MHz` 且 `PLLP∈{2,4,6,8}`，只有 `PLLP=2, VCO=360MHz` 这个组合落在 VCO 允许范围（100~432MHz）内；而要 `CK48M=VCO/PLLQ=48MHz` 且 `PLLQ` 取整数，`VCO` 必须是 48 的整数倍——360 不是 48 的整数倍（`360/48=7.5`），所以单靠这一个 PLL，180MHz 主频和精确 48MHz 外设时钟不可能同时成立。
+
+最终选择：把 VCO 换成 336MHz（`PLLN` 从 360 改成 336），主频跟着降到 `336/2=168MHz`；`CK48M = 336/PLLQ`，`PLLQ` 改成 7，正好是精确的 `48MHz`。168MHz 用的 Flash 等待周期（`FLASH_LATENCY_5`）和之前一样不用改，APB1/APB2 分频后的 42MHz/84MHz 也都在各自总线时钟上限（45MHz/90MHz）以内，比之前 180MHz 时刚好卡在上限还更留了余量。目前项目还没真正用到 USB/SDIO/RNG，这次纯粹是为了"配置本身要精确/标准"、给以后要用这些外设时铺路，不是修一个正在发生的 bug。
+
+### 举一反三
+
+看到"某个时钟源理论上有多种路径可选（比如这里的 PLLSAI）"的资料/经验时，别急着当成通用方案直接抄——一定要先翻这颗芯片自己的 HAL 头文件里对应的 `#if defined(STM32Fxxx)` 分支，确认这个字段/宏在你用的具体型号上真的存在。同一系列不同型号（这里是 F429/439 vs F469/479）的 RCC 外围电路并不总是对齐的。
+
 ---
 
 ## 小结（问题一、二）：这个项目里"静态库 + 弱符号别名"是一个反复出现的坑
