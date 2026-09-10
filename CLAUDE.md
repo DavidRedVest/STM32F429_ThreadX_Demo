@@ -6,11 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bare-metal firmware template for an STM32F429 (Cortex-M4) target, intended to integrate the
 STM32F4xx HAL and Eclipse ThreadX (RTOS), built with CMake + Ninja and an `arm-none-eabi` GCC
-toolchain. The project is in an early scaffolding stage: the CMake module graph is laid out, but
-`app/` and `middlewares/threadx/` currently contain only a `CMakeLists.txt` each with no sources
-yet (no `src/`/`inc/` under `app`, no ThreadX kernel/port sources under `middlewares/threadx`).
-`core/` and `drivers/` (STM32F4xx HAL/LL + CMSIS, vendored) have real source files, and `bsp/` has
-just started to (a minimal GPIO LED helper, `bsp_led.c`/`.h`) — see Architecture below.
+toolchain. `core/`, `drivers/`, `bsp/`, and `app/` all have real sources now; only
+`middlewares/threadx/` is still an empty stub (just a `CMakeLists.txt`, no ThreadX kernel/port
+sources yet) — see Architecture below.
 
 ## Build
 
@@ -53,12 +51,13 @@ toolchain:
   (per the usual STM32CubeMX layout) lives in `core/inc` next to `main.h`, not in `drivers/inc`.
   This is a header search path only, not a CMake target link dependency (no `core → drivers`
   cycle).
-- `app/` and `middlewares/threadx` `CMakeLists.txt` each guard their `file(GLOB ...)` with
+- `app/`'s and `middlewares/threadx`'s `CMakeLists.txt` guard their `file(GLOB ...)` with
   `if(NOT <SOURCES>)` and fall back to writing an empty stub `.c` into the build dir — modern CMake
-  refuses `add_library(... OBJECT)`/`add_executable(...)` with zero sources, and these two modules
-  currently have none. The stub is skipped automatically once real sources exist. The root
-  executable target has the same problem for the same reason (all its code comes from the linked
-  OBJECT libs) and gets a generated `exe_stub.c` the same way, plus an explicit
+  refuses `add_library(... OBJECT)`/`add_executable(...)` with zero sources. `app/` now has real
+  sources (`app.c`) so its stub branch is dead/skipped; `middlewares/threadx` still has none, so it
+  still falls back. The root executable target has the same problem for the same reason (all its
+  code comes from the linked OBJECT libs) and gets a generated `exe_stub.c` the same way, plus an
+  explicit
   `LINKER_LANGUAGE C` since a sourceless target can't infer one.
 
 **Resolved (2026-09-10, superseded)**: `SysTick_Handler` (and every other real handler in
@@ -100,8 +99,8 @@ via `list(REMOVE_ITEM ...)` since Ethernet isn't currently used. To re-enable Et
 `list(REMOVE_ITEM HAL_SOURCES ".../stm32f4xx_hal_eth.c")` from `drivers/CMakeLists.txt` and either
 restore the real `Legacy/stm32_hal_legacy.h` or define `PHY_READ_TO`/`PHY_WRITE_TO` yourself. Full
 `cmake -B build -G Ninja && cmake --build build` now succeeds end-to-end and produces
-`stm32f429_firmware.elf/.hex/.bin` (HAL + a small `bsp` LED helper + empty `app`/`threadx` stub
-libs).
+`stm32f429_firmware.elf/.hex/.bin` (HAL + `bsp`'s LED/UART code + `app`'s init/task functions +
+an empty `threadx` stub).
 
 Toolchain note: `arm-none-eabi-gcc` on this dev machine is unpacked at a custom path
 (`~/home/tools/arm-gnu-toolchain-*/bin`), not on `PATH` by default — add it to your shell profile
@@ -115,18 +114,18 @@ CMake module graph (each is an OBJECT library except the root executable and the
 for why OBJECT rather than STATIC):
 
 ```
-core        -> drivers, threadx, bsp, stm32_mcu_flags   (also owns startup_*.S and system_stm32f4xx.c)
+core        -> drivers, threadx, bsp, app, stm32_mcu_flags   (also owns startup_*.S and system_stm32f4xx.c)
 drivers     -> stm32_mcu_flags
 bsp         -> drivers, stm32_mcu_flags
 threadx     -> stm32_mcu_flags
 app         -> bsp, threadx, stm32_mcu_flags
 ```
 
-Note the `core -> bsp` edge: `core/src/main.c` calls `bsp`'s `led_init()` directly (and toggles
-the LED GPIOs itself in the main loop) rather than going through `app`. `app` is still wired up to
-depend on `bsp`/`threadx` per the intended layering, but until `app/` grows real sources, `core`
-is where board-level code is actually being exercised — keep that in mind before assuming `app` is
-the only consumer of `bsp`.
+`core/src/main.c` is now a thin entry point: `HAL_Init()` → `SystemClock_Config()` → `app_init()`,
+then `while (1) app_task();`. All board-level/application logic (LED, UART console, the demo
+`rt_kprintf` calls) lives in `app/src/app.c`, matching the intended layering — `core` depends on
+`app` (not the other way around) purely so `main()` can call into it, the same way a vendor
+"Templates" `main.c` calls into user application code.
 
 The root `CMakeLists.txt` links the final `stm32f429_firmware` executable against
 `app bsp threadx drivers core` — no special linker flags needed for any of them now that they're
@@ -146,11 +145,16 @@ Layer responsibilities (intended, per the module layout):
   `middlewares/threadx` gets real sources. `stm32f4xx_it.c`'s `SysTick_Handler()` is dead code
   right now (SysTick's interrupt is never enabled) and needs to be deleted once ThreadX supplies
   its own — leaving both would be a duplicate-symbol link error under the OBJECT-library setup.
-- `bsp/` — board support layer, sits on top of `drivers`. Currently just `bsp_led.{c,h}`, a thin
-  GPIOB PB0/PB1 output-pin wrapper (`led_init()`) used from `core/src/main.c` for a blink demo.
+- `bsp/` — board support layer, sits on top of `drivers`: `bsp_led.{c,h}` (GPIOB PB0/PB1 output-pin
+  wrapper) and `bsp_uart.{c,h}` (USART1 PA9/PA10 init + RX IRQ), plus a ported subset of
+  RT-Thread's `kservice.c`/`rt_vsnprintf.c` (`rtthread.h`) for `rt_kprintf()`-style formatted UART
+  output — see `docx/TROUBLESHOOTING.md` for the porting bugs found along the way.
 - `middlewares/threadx/` — intended to hold the ThreadX kernel (`common/`) and Cortex-M4 GNU port
   (`ports/cortex_m4/gnu/`) sources, referencing `tx_user.h` from `core/inc` (currently empty).
-- `app/` — application/business logic, depends on `bsp` and `threadx` (currently empty).
+- `app/` — application/business logic, depends on `bsp` and `threadx`. `app.c` exposes `app_init()`
+  (one-time setup: LED + UART init, demo `rt_kprintf` calls) and `app_task()` (the LED toggle +
+  `HAL_Delay(500)` body of `core/src/main.c`'s main loop) — `app_task()` is written so it can later
+  become a ThreadX thread entry function's loop body with minimal changes.
 
 Toolchain file `cmake/arm-none-eabi.cmake` sets `CMAKE_SYSTEM_NAME Generic` and
 `CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY` (required for cross-compiling bare-metal — the
