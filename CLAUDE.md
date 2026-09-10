@@ -139,7 +139,13 @@ Layer responsibilities (intended, per the module layout):
 - `drivers/` — vendored STM32F4xx HAL/LL drivers and CMSIS headers (`cminc/`); not meant to be
   hand-edited except for local fixes.
 - `core/` — CMSIS device startup/system files and `main.c`/`stm32f4xx_it.c`/HAL MSP config —
-  the vendor "Templates" style entry point and IRQ handlers.
+  the vendor "Templates" style entry point and IRQ handlers. Also owns
+  `stm32f4xx_hal_timebase_tim.c`, which overrides `HAL_InitTick()`/`HAL_SuspendTick()`/
+  `HAL_ResumeTick()` to drive `uwTick` (and therefore `HAL_Delay()`) from TIM6 instead of SysTick —
+  done in anticipation of ThreadX's own Cortex-M4 port claiming SysTick for the RTOS tick once
+  `middlewares/threadx` gets real sources. `stm32f4xx_it.c`'s `SysTick_Handler()` is dead code
+  right now (SysTick's interrupt is never enabled) and needs to be deleted once ThreadX supplies
+  its own — leaving both would be a duplicate-symbol link error under the OBJECT-library setup.
 - `bsp/` — board support layer, sits on top of `drivers`. Currently just `bsp_led.{c,h}`, a thin
   GPIOB PB0/PB1 output-pin wrapper (`led_init()`) used from `core/src/main.c` for a blink demo.
 - `middlewares/threadx/` — intended to hold the ThreadX kernel (`common/`) and Cortex-M4 GNU port
