@@ -1,0 +1,18 @@
+set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_SYSTEM_PROCESSOR arm)
+
+# 确保 CMake  不尝试链接可执行文件来测试编译器
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+set(TOOLCHAIN_PREFIX arm-none-eabe-)
+
+set(CMAKE_C_COMPILER        ${TOOLCHAIN_PREFIX}gcc)
+set(CMAKE_CXX_COMPILER      ${TOOLCHAIN_PREFIX}g++)
+set(CMAKE_ASM_COMPILER      ${TOOLCHAIN_PREFIX}gcc)
+set(CMAKE_OBJCOPY           ${TOOLCHAIN_PREFIX}objcopy)
+set(CMAKE_OBJDUMP           ${TOOLCHAIN_PREFIX}objdump)
+set(CMAKE_SIZE              ${TOOLCHAIN_PREFIX}size)
+
+set(CMAKE_EXECUTABLE_SUFFIX_ASM     ".elf")
+set(CMAKE_EXECUTABLE_SUFFIX_C       ".elf")
+set(CMAKE_EXECUTABLE_SUFFIX_CXX     ".elf")

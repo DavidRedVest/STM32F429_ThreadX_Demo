@@ -1,0 +1,5 @@
+add_library(app STATIC)
+file(GLOB APP_SOURCE "src/*.c")
+target_sources(app PRIVATE ${APP_SOURCE})
+target_include_directories(app PUBLIC inc)
+target_link_libraries(app PUBLIC bap threadx stm32_muc_flags)

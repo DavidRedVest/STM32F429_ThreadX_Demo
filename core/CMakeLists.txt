@@ -1,0 +1,5 @@
+add_library(core STATIC)
+file(GLOB CORE_SOURCES "Src/*.c")
+target_sources(core PRIVATE ${CORE_SOURCES})
+target_include_directories(core PUBLIC Inc)
+target_link_libraries(core PUBLIC drivers threadx stm32_mcu_flags)
