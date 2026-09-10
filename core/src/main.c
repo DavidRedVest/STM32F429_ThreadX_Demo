@@ -18,7 +18,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
+#include "bsp_led.h"
 /** @addtogroup STM32F4xx_HAL_Examples
  * @{
  */
@@ -61,10 +61,20 @@ int main(void)
 
   /* Add your application code here
    */
+  led_init();
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
 
   /* Infinite loop */
   while (1)
   {
+    HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_0);
+    HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_1);
+    HAL_Delay(500);
+   // HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+   // HAL_Delay(500);
+   // HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+   // HAL_Delay(500);
   }
 }
 
