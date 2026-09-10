@@ -89,6 +89,18 @@ file, which is what caused both bugs above. This also let the `-Wl,--whole-archi
 archives to begin with). Trade-off: none of these five targets can be distributed/reused as a
 standalone `.a` outside this build anymore, but nothing in this repo needed that.
 
+**Resolved**: `SystemClock_Config()` (`core/src/main.c`) targets **168 MHz**, not the F429's max
+180 MHz — deliberate, not a mistake. `HSE_VALUE` (`core/inc/stm32f4xx_hal_conf.h`) was originally
+left at ST's template default of 8 MHz while `PLLM=25` only makes sense for this board's actual
+25 MHz HSE crystal (`PLLM=25` implies a 1 MHz PLL input, which requires HSE=25 MHz); the mismatch
+threw every HAL clock calculation off by 180/57.6 ≈ 3.125×, garbling UART output and running
+`HAL_Delay()` fast. Separately, CK48M (feeds USB OTG FS/SDIO/RNG) has no PLLSAI path on
+STM32F429/439 (only F469/F479 have `RCC_CLK48CLKSOURCE_PLLSAIP`) — it's hardwired to the main
+PLL's `Q` output only, and VCO=360MHz (the 180 MHz config) isn't a multiple of 48, so no integer
+`PLLQ` gives an exact 48 MHz at 180 MHz SYSCLK. Retuned to `PLLN=336`/`PLLQ=7` (VCO=336MHz):
+SYSCLK=168MHz, CK48M=48MHz exactly. Full writeups (with the `nm`/`objdump` verification steps) are
+in `docx/TROUBLESHOOTING.md`, problem 3 and its two follow-ups.
+
 **Resolved**: `drivers/inc/` never got the `Legacy/` subfolder from the source STM32Cube_FW_F4
 package (HAL tag v1.28.3), so `drivers/inc/stm32f4xx_hal_def.h`'s
 `#include "Legacy/stm32_hal_legacy.h"` couldn't resolve. Per-project decision: rather than
