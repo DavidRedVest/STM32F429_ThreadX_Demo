@@ -19,6 +19,10 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "bsp_led.h"
+#include "rtthread.h"
+#include "bsp_uart.h"
+
+
 /** @addtogroup STM32F4xx_HAL_Examples
  * @{
  */
@@ -44,7 +48,8 @@ static void Error_Handler(void);
  */
 int main(void)
 {
-
+    int serial1 = 123456789;
+    double serial2 = 123456789.123456789;
   /* STM32F4xx HAL library initialization:
        - Configure the Flash prefetch, Flash preread and Buffer caches
        - Systick timer is configured by default as source of time base, but user
@@ -62,8 +67,10 @@ int main(void)
   /* Add your application code here
    */
   led_init();
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
+  my_uart_init(115200);
+
+  rt_kprintf("Hello RT-Thread:%ld \r\n", serial1);
+  rt_kprintf("Test Float:%lf \r\n", serial2);
 
   /* Infinite loop */
   while (1)
