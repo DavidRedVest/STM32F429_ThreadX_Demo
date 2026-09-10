@@ -69,6 +69,7 @@ int main(void)
   led_init();
   my_uart_init(115200);
 
+  rt_kprintf("%x\r\n",0x1234);
   rt_kprintf("Hello RT-Thread:%ld \r\n", serial1);
   rt_kprintf("Test Float:%lf \r\n", serial2);
 
@@ -94,11 +95,11 @@ int main(void)
  *            AHB Prescaler                  = 1
  *            APB1 Prescaler                 = 4
  *            APB2 Prescaler                 = 2
- *            HSE Frequency(Hz)              = 8000000
- *            PLL_M                          = 8
+ *            HSE Frequency(Hz)              = 25000000
+ *            PLL_M                          = 25
  *            PLL_N                          = 360
  *            PLL_P                          = 2
- *            PLL_Q                          = 7
+ *            PLL_Q                          = 8
  *            VDD(V)                         = 3.3
  *            Main regulator output voltage  = Scale1 mode
  *            Flash Latency(WS)              = 5
