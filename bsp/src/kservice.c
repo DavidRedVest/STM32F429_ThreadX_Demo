@@ -996,6 +996,7 @@ rt_weak int rt_vsnprintf(char *buf, rt_size_t size, const char *fmt, va_list arg
 
         case 'X':
             flags |= LARGE;
+            /* fall through */
         case 'x':
             base = 16;
             break;
