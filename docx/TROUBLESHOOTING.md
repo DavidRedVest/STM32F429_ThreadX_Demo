@@ -325,4 +325,6 @@ RCC_OscInitStructure.PLL.PLLP = 2;
 2. 这两个文件被编译进**同一个 CMake STATIC 库**；
 3. 弱定义所在的文件，因为**自身内部**就会调用/引用这个符号（向量表引用 `SysTick_Handler`、`rt_kprintf` 内部调用 `rt_vsnprintf`），所以这个文件一旦因为别的原因被链接器拉入，弱定义就会"就地"满足引用，链接器不会再去archive 里找强定义。
 
-`app/`、`middlewares/threadx/` 一旦有了真实代码，如果也出现"同一个符号多处定义（弱兜底 + 强覆盖）"的模式，大概率会重复踩到这个坑。目前的应对方式是把涉及到的静态库整体纳入根 `CMakeLists.txt` 的 `-Wl,--whole-archive` / `-Wl,--no-whole-archive` 范围；如果以后模块变多，也可以考虑更省心的办法——比如干脆不追求"按需链接"，把所有内部模块库都整体 `--whole-archive`（反正最终都要链进同一个固件，STATIC 库在这里只是用来组织源码，不是为了减小体积）。
+`app/`、`middlewares/threadx/` 一旦有了真实代码，如果也出现"同一个符号多处定义（弱兜底 + 强覆盖）"的模式，大概率会重复踩到这个坑。当时的应对方式是把涉及到的静态库整体纳入根 `CMakeLists.txt` 的 `-Wl,--whole-archive` / `-Wl,--no-whole-archive` 范围——这只是"哪个模块中了就补哪个"的治标办法。
+
+**后续处理（2026-09-10）**：既然这几个模块库本来就只是用来组织源码、从没打算脱离这个工程单独分发复用，索性把 `app`/`bsp`/`threadx`/`drivers`/`core` 全部从 `add_library(... STATIC)` 改成了 `add_library(... OBJECT)`。OBJECT 库不会打包成 `.a` 归档，链接的时候每一个目标文件都会无条件进最终链接，没有"按需抽取"这一步，也就没有弱符号被截胡的空间——从根上把这一整类坑消除了，根 `CMakeLists.txt` 里的 `--whole-archive`/`--no-whole-archive` 也随之整段删除。改完用 `nm` 复查过 `SysTick_Handler`、`rt_vsnprintf`、`HAL_UART_MspInit` 三个符号，全部是独立地址的强符号，行为和之前一致。唯一的代价是这几个模块以后没法脱离本工程单独打包给别的项目用，但目前没有这个需求。

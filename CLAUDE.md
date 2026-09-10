@@ -53,33 +53,42 @@ toolchain:
   (per the usual STM32CubeMX layout) lives in `core/inc` next to `main.h`, not in `drivers/inc`.
   This is a header search path only, not a CMake target link dependency (no `core → drivers`
   cycle).
-- `app/`, `bsp/`, and `middlewares/threadx` `CMakeLists.txt` each guard their `file(GLOB ...)` with
+- `app/` and `middlewares/threadx` `CMakeLists.txt` each guard their `file(GLOB ...)` with
   `if(NOT <SOURCES>)` and fall back to writing an empty stub `.c` into the build dir — modern CMake
-  refuses `add_library(... STATIC)`/`add_executable(...)` with zero sources, and these three
-  modules currently have none. The stub is skipped automatically once real sources exist. The root
-  executable target has the same problem for the same reason (all its code comes from linked
-  static libs) and gets a generated `exe_stub.c` the same way, plus an explicit
+  refuses `add_library(... OBJECT)`/`add_executable(...)` with zero sources, and these two modules
+  currently have none. The stub is skipped automatically once real sources exist. The root
+  executable target has the same problem for the same reason (all its code comes from the linked
+  OBJECT libs) and gets a generated `exe_stub.c` the same way, plus an explicit
   `LINKER_LANGUAGE C` since a sourceless target can't infer one.
 
-**Resolved (2026-09-10)**: `SysTick_Handler` (and every other real handler in
+**Resolved (2026-09-10, superseded)**: `SysTick_Handler` (and every other real handler in
 `core/src/stm32f4xx_it.c`) was silently never linked in, so `HAL_IncTick()` never ran, `uwTick`
 never advanced, and any `HAL_Delay()` call hung forever — the LED blink loop would get stuck on
 its first `HAL_Delay(500)`. Root cause: `startup_stm32f429xx.S` defines weak aliases
 (`.thumb_set SysTick_Handler, Default_Handler`, an infinite self-loop) for every vector, in the
-*same* object file as the vector table itself. Since `core` is a STATIC library, the linker only
-pulls an archive member when it has an outstanding undefined symbol — but the vector table's
-reference to `SysTick_Handler` is already satisfied the moment `startup_stm32f429xx.o` is pulled
-in (for `Reset_Handler`), so it never has a reason to also pull `stm32f4xx_it.o` out of the same
-`core.a` for the strong override. Confirmed with `arm-none-eabi-nm`/`objdump`: `SysTick_Handler`
-resolved to the exact same address as `Default_Handler`, disassembling to `b.n` (self-loop). This
-class of bug is specific to splitting startup + IRQ handlers across a *static-library* build (ST's
-own Makefile/CubeIDE templates link all `.o` files directly, where every object is always
-included, so it never surfaces there). Fixed by wrapping `core` in
-`-Wl,--whole-archive ... -Wl,--no-whole-archive` in the root `CMakeLists.txt`'s
-`target_link_libraries`, forcing every member object (including `stm32f4xx_it.o`) into the link so
-the strong/weak ELF symbol rule can actually apply. Verify after touching `core`'s objects with
+*same* object file as the vector table itself. Back when `core` was a STATIC library, the linker
+only pulled an archive member when it had an outstanding undefined symbol — but the vector table's
+reference to `SysTick_Handler` was already satisfied the moment `startup_stm32f429xx.o` got pulled
+in (for `Reset_Handler`), so the linker never had a reason to also pull `stm32f4xx_it.o` out of the
+same `core.a` for the strong override. Confirmed with `arm-none-eabi-nm`/`objdump`: `SysTick_Handler`
+resolved to the exact same address as `Default_Handler`, disassembling to `b.n` (self-loop). The
+same shadowing pattern separately hit `bsp` too (see `docx/TROUBLESHOOTING.md` problem 2:
+`kservice.c`'s weak `rt_vsnprintf` was shadowing the full-featured strong one in `rt_vsnprintf.c`).
+Both were first patched with `-Wl,--whole-archive ... -Wl,--no-whole-archive` around the affected
+module(s) in the root `CMakeLists.txt`. That patch is gone now — see the OBJECT-library note right
+below, which removes the whole bug class instead of patching each instance. Verify with
 `arm-none-eabi-nm build/stm32f429_firmware.elf | grep SysTick_Handler` — its address must differ
 from `Default_Handler`'s.
+
+**Resolved**: all five module libraries (`app`, `bsp`, `threadx`, `drivers`, `core`) were switched
+from `add_library(... STATIC)` to `add_library(... OBJECT)`. OBJECT libraries aren't archived into
+a `.a`, so every one of their object files lands in the final link unconditionally — there's no
+archive-extraction step left for a weak definition to "shadow" a strong one from a sibling source
+file, which is what caused both bugs above. This also let the `-Wl,--whole-archive`/
+`-Wl,--no-whole-archive` wrapping be removed from the root `CMakeLists.txt`'s
+`target_link_libraries` entirely — it's meaningless for OBJECT libraries anyway (they were never
+archives to begin with). Trade-off: none of these five targets can be distributed/reused as a
+standalone `.a` outside this build anymore, but nothing in this repo needed that.
 
 **Resolved**: `drivers/inc/` never got the `Legacy/` subfolder from the source STM32Cube_FW_F4
 package (HAL tag v1.28.3), so `drivers/inc/stm32f4xx_hal_def.h`'s
@@ -101,8 +110,9 @@ installed via Homebrew.
 
 ## Architecture
 
-CMake module graph (each is a STATIC library except the root executable and the
-`stm32_mcu_flags` INTERFACE library):
+CMake module graph (each is an OBJECT library except the root executable and the
+`stm32_mcu_flags` INTERFACE library — see the OBJECT-library "Resolved" entry under Build status
+for why OBJECT rather than STATIC):
 
 ```
 core        -> drivers, threadx, bsp, stm32_mcu_flags   (also owns startup_*.S and system_stm32f4xx.c)
@@ -119,13 +129,11 @@ is where board-level code is actually being exercised — keep that in mind befo
 the only consumer of `bsp`.
 
 The root `CMakeLists.txt` links the final `stm32f429_firmware` executable against
-`app bsp threadx drivers core`, with `core` wrapped in `-Wl,--whole-archive`/`-Wl,--no-whole-archive`
-— required so the real IRQ handlers in `stm32f4xx_it.c` actually override the weak
-`Default_Handler` aliases that `startup_stm32f429xx.S` defines in the same static library (see the
-2026-09-10 "Resolved" entry under Build status for why plain archive linking silently drops them).
-Toolchain flags (`-mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard`) and the linker
-script (`cmake/STM32F429IGT6_FLASH.ld`) are centralized in the `stm32_mcu_flags` INTERFACE library
-and propagated to every module through it, rather than being repeated per-target.
+`app bsp threadx drivers core` — no special linker flags needed for any of them now that they're
+OBJECT libraries; every one of their object files always lands in the final link. Toolchain flags
+(`-mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard`) and the linker script
+(`cmake/STM32F429IGT6_FLASH.ld`) are centralized in the `stm32_mcu_flags` INTERFACE library and
+propagated to every module through it, rather than being repeated per-target.
 
 Layer responsibilities (intended, per the module layout):
 - `drivers/` — vendored STM32F4xx HAL/LL drivers and CMSIS headers (`cminc/`); not meant to be
