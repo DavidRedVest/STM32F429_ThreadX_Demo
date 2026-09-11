@@ -14,3 +14,27 @@ void led_init(void)
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET); // PB0置1
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET); // PB1置1
 }
+void led1_on(void)
+{
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1,GPIO_PIN_RESET);
+}
+void led1_off(void)
+{
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1,GPIO_PIN_SET);
+}
+void led1_toggle(void)
+{
+    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_1);
+}
+void led2_on(void)
+{
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0,GPIO_PIN_RESET);
+}
+void led2_off(void)
+{
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0,GPIO_PIN_SET);
+}
+void led2_toggle(void)
+{
+    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
+}
