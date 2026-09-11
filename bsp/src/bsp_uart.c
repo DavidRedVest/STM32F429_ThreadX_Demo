@@ -90,7 +90,12 @@ void my_uart_init(u32 bound)
 	HAL_UART_Init(&huart1);					    //HAL_UART_Init()会使能UART1
 
 //	HAL_UART_Receive_IT(&huart1, (u8 *)aRxBuffer, RXBUFFERSIZE);//该函数会开启接收中断：标志位UART_IT_RXNE，并且设置接收缓冲以及接收缓冲接收最大数据量
-
+//	不用HAL_UART_Receive_IT():它会把 huart1 切到 HAL_UART_STATE_BUSY_RX 并接管一套
+//	自己的 pRxBuffPtr/RxXferCount 缓冲逻辑，跟 USART1_IRQHandler 里直接读DR、手写
+//	到 g_tUART1_Handle 的方式冲突。只开 RXNE 中断位,中断处理仍然全部走下面手写的
+//	USART1_IRQHandler。之前一直没开这个位,USART1 收不到任何数据,list/led_set等
+//	串口指令全都没反应。
+	__HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE);
 
 }
 
