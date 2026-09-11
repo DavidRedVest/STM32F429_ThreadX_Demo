@@ -22,6 +22,21 @@ Post-build, the executable target (`${CMAKE_PROJECT_NAME}` = `stm32f429_firmware
 
 There is no test suite or linter configured in this repo yet.
 
+Each module's `CMakeLists.txt` (`core`, `drivers`, `bsp`, `app`, `middlewares/threadx`) collects
+its sources with a plain `file(GLOB ... "src/*.c")` — none use `CONFIGURE_DEPENDS`. This means
+adding or removing a source file under an existing module directory is invisible to Ninja until
+CMake is re-run: `cmake --build build` alone will silently keep building the old file list (no
+error, the new file just never gets compiled). After adding/removing a `.c`/`.S` file, re-run
+`cmake -B build -G Ninja` before `cmake --build build`.
+
+### Editor / tooling
+
+The root `CMakeLists.txt` sets `CMAKE_EXPORT_COMPILE_COMMANDS ON`, so every `cmake -B build`
+(re)generates `build/compile_commands.json`. `.vscode/settings.json` points `clangd` at that file
+and explicitly disables the Microsoft C/C++ extension's IntelliSense (`.vscode/extensions.json`
+lists `ms-vscode.cpptools` as unwanted) — clangd is the intended source of code navigation/
+diagnostics for this repo, not cpptools.
+
 ### Flashing
 
 `jlink.cfg` at the repo root is a J-Link command file targeting `stm32f429ig` over SWD; it loads
