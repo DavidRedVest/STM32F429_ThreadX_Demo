@@ -260,10 +260,13 @@ Layer responsibilities (intended, per the module layout):
     same class of pitfall as the weak-shadowing bugs below, just avoided this time instead of hit).
   - `usmart.{c,h}`/`usmart_str.{c,h}` — a ported ALIENTEK "usmart" runtime console: register a C
     function's pointer + a string prototype in a table (see `app/src/usmart_config.c`) and invoke
-    it by name/args over UART. `usmart_dev.init()` is called from `app_init()` and `USART1_IRQHandler`
-    fills the line buffer it reads from, but nothing in `app_task()` currently calls
-    `usmart_dev.scan()`/`.exe()` — the console is wired for RX but not yet pumped by the main loop.
-    See the compiler-standard note under Build above for its build-flag quirk.
+    it by name/args over UART. `usmart_dev.init()` is called from `app_init()`, and
+    `USART1_IRQHandler` fills the line buffer it reads from. Contrary to an earlier note here, the
+    console *is* actively pumped: `usmart_init()` (`bsp/src/usmart.c`) itself calls
+    `Timer4_Init()` when `USMART_ENTIMX_SCAN==1` (the default, `bsp/inc/usmart.h`), which enables a
+    TIM4 interrupt (`TIM4_IRQHandler`) that calls `usmart_dev.scan()` every 100ms independent of
+    `app_task()`/ThreadX — so `list`/`led_set(...)`-style commands typed over UART work today, not
+    just RX buffering. See the compiler-standard note under Build above for its build-flag quirk.
   - See `docx/TROUBLESHOOTING.md` for the UART/`rt_kprintf` porting bugs found along the way.
 - `middlewares/threadx/` — the vendored ThreadX kernel (`common/{inc,src}`) and Cortex-M4 GNU port
   (`ports/inc`, `ports/src/*.S`, plus `ports/tx_initialize_low_level.S`), with
