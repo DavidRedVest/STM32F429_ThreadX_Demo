@@ -59,6 +59,7 @@ static void AppObjCreate(void);
 static void App_Printf(const char *fmt, ...);
 static void AppTaskStat(ULONG thread_input);
 static void AppTaskIDLE(ULONG thread_input);
+static void DispTaskInfo(void);
 void OSStatInit(void);
 static void AppTaskCreate(void);
 /*
@@ -169,7 +170,7 @@ void app_task(void)
 */
 void tx_application_define(void *first_unused_memory)
 {
-    (void *)first_unused_memory;
+    (void)first_unused_memory;
     /*
        如果实现任务CPU利用率统计的话，此函数仅用于实现启动任务，统计任务和空闲任务，其它任务在函数
        AppTaskCreate里面创建。
@@ -226,11 +227,12 @@ static void AppTaskStart(ULONG thread_input)
     /* 优先执行任务统计 */
     OSStatInit();
 
+    /* 创建任务间通信机制：必须先于 AppTaskCreate()，否则新建的任务一旦被调度就可能
+     * 用到还没创建的 AppPrintfSemp（正确性不应该依赖任务优先级/调度顺序） */
+    AppObjCreate();
+
     /* 创建任务 */
     AppTaskCreate();
-
-    /* 创建任务间通信机制 */
-    AppObjCreate();
 
     while (1)
     {
@@ -364,7 +366,7 @@ static void AppTaskCreate(void)
 static void AppObjCreate(void)
 {
     /* 创建互斥信号量 */
-    tx_mutex_create(&AppPrintfSemp, "AppPrintfStmp", TX_NO_INHERIT);
+    tx_mutex_create(&AppPrintfSemp, "AppPrintfStmp", TX_INHERIT);
 }
 /*
 *********************************************************************************************************
@@ -377,15 +379,16 @@ static void AppObjCreate(void)
 */
 static void App_Printf(const char *fmt, ...)
 {
-#if 0
     char buf_str[200 + 1]; /* 特别注意，如果printf的变量较多，注意此局部变量的大小是否够用 */
     va_list v_args;
 
+    /* 用 rt_vsnprintf（bsp/src/rt_vsnprintf.c，不依赖 <stdio.h>）代替标准库的 vsnprintf，
+     * 先把格式化结果拼进局部缓冲区，再整串交给 rt_kprintf 输出。 */
     va_start(v_args, fmt);
-    (void)vsnprintf((char *)&buf_str[0],
-                    (size_t)sizeof(buf_str),
-                    (char const *)fmt,
-                    v_args);
+    (void)rt_vsnprintf((char *)&buf_str[0],
+                        (rt_size_t)sizeof(buf_str),
+                        (char const *)fmt,
+                        v_args);
     va_end(v_args);
 
     /* 互斥操作 */
@@ -394,7 +397,6 @@ static void App_Printf(const char *fmt, ...)
     rt_kprintf("%s", buf_str);
 
     tx_mutex_put(&AppPrintfSemp);
-#endif
 }
 /*
 *********************************************************************************************************
@@ -448,6 +450,7 @@ static void AppTaskKey(ULONG thread_input)
                 break;
             case KEY_DOWN_WKUP:
                 App_Printf("WKUP 按键按下\r\n");
+                DispTaskInfo();
                 break;
             default:
                 break;
@@ -455,4 +458,44 @@ static void AppTaskKey(ULONG thread_input)
         }
         tx_thread_sleep(5);
     }
+}
+
+
+/*
+*********************************************************************************************************
+*	函 数 名: DispTaskInfo
+*	功能说明: 将uCOS-III任务信息通过串口打印出来
+*	形    参：无
+*	返 回 值: 无
+*********************************************************************************************************
+*/
+static void DispTaskInfo(void)
+{
+	TX_THREAD      *p_tcb;	        /* 定义一个任务控制块指针 */
+
+    p_tcb = &AppTaskStartTCB;
+	
+	/* 打印标题 */
+	App_Printf("===============================================================\r\n");
+	App_Printf("OS CPU Usage = %5.2f%%\r\n", OSCPUUsage);
+	App_Printf("===============================================================\r\n");
+	App_Printf(" 任务优先级 任务栈大小 当前使用栈  最大栈使用   任务名\r\n");
+	App_Printf("   Prio     StackSize   CurStack    MaxStack   Taskname\r\n");
+
+	/* 遍历任务控制块列?TCB list)，打印所有的任务的优先级和名?*/
+	while (p_tcb != (TX_THREAD *)0) 
+	{
+		
+		App_Printf("   %2d        %5d      %5d       %5d      %s\r\n", 
+                    p_tcb->tx_thread_priority,
+                    p_tcb->tx_thread_stack_size,
+                    (int)p_tcb->tx_thread_stack_end - (int)p_tcb->tx_thread_stack_ptr,
+                    (int)p_tcb->tx_thread_stack_end - (int)p_tcb->tx_thread_stack_highest_ptr,
+                    p_tcb->tx_thread_name);
+
+
+        p_tcb = p_tcb->tx_thread_created_next;
+
+        if(p_tcb == &AppTaskStartTCB) break;
+	}
 }
