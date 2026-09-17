@@ -2,7 +2,7 @@ add_library(threadx OBJECT)
 
 # 收集 ThreadX 内核通用源码与 Cortex-M4 GNU 汇编
 file(GLOB TX_COMMON_SOURCES "common/src/*.c")
-file(GLOB TX_PORT_SOURCES "ports/cortex_m4/gnu/src/*.c" "ports/cortex_m4/gnu/src/*.S")
+file(GLOB TX_PORT_SOURCES "ports/src/*.c" "ports/*.S")
 
 set(TX_SOURCES ${TX_COMMON_SOURCES} ${TX_PORT_SOURCES})
 if(NOT TX_SOURCES)
@@ -18,7 +18,7 @@ target_sources(threadx PRIVATE
 
 target_include_directories(threadx PUBLIC
     common/inc
-    ports/cortex_m4/gnu/inc
+    ports/inc
     ${CMAKE_SOURCE_DIR}/core/inc # 包含 tx_user.h
 )
 
