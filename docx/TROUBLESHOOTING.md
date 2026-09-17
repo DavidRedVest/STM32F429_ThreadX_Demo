@@ -347,6 +347,183 @@ RCC_OscInitStructure.PLL.PLLP = 2;
 
 ---
 
+## 问题四：移植 ThreadX 内核/端口代码后编译报错（2026-09-17）
+
+### 背景
+
+在 commit `9c8814b`（"bug(): 没有编译通过"）里，把 ThreadX 官方仓库的内核通用代码（`common/`）和
+Cortex-M4 GNU 端口代码（`ports/`）整份移植进了 `middlewares/threadx/`，同时把 `app/src/app.c`
+改成用真正的 ThreadX API 起线程——`app_init()` 末尾调用 `tx_kernel_enter()` 进入 RTOS，
+`tx_application_define()` 里用 `tx_thread_create()` 建了 `AppTaskStart`/`AppTaskStat`/
+`AppTaskIDLE`/`AppTaskLed`/`AppTaskKey` 五个任务。移植完直接 `cmake --build build`，链接失败。
+
+### 现象
+
+```
+undefined reference to `__RAM_segment_used_end__'
+undefined reference to `_tx_thread_schedule'
+undefined reference to `_tx_thread_stack_build'
+undefined reference to `_tx_timer_interrupt'
+undefined reference to `_vectors'
+stm32f4xx_it.c:(.text.SysTick_Handler+0x0): multiple definition of `SysTick_Handler';
+  .../tx_initialize_low_level.S.obj:(.text+0x62): first defined here
+```
+
+`undefined reference` 和 `multiple definition` 同时出现，一开始容易以为是一个问题，实际上是
+**四个互相独立的根因**叠在一起，需要逐个排查、逐个修。
+
+### 根因 4.1：`middlewares/threadx/CMakeLists.txt` 的 glob 漏掉了大部分端口汇编文件
+
+```cmake
+file(GLOB TX_COMMON_SOURCES "common/src/*.c")
+file(GLOB TX_PORT_SOURCES "ports/src/*.c" "ports/*.S")
+```
+
+ThreadX Cortex-M4 GNU 端口真正的汇编实现文件（`tx_thread_schedule.S`、`tx_thread_stack_build.S`、
+`tx_thread_context_save.S`/`_restore.S`、`tx_thread_system_return.S`、`tx_timer_interrupt.S`、
+`tx_thread_interrupt_control.S`/`_disable.S`/`_restore.S`、`tx_misra.S`）全部放在
+`ports/src/*.S` 下；只有 `tx_initialize_low_level.S` 这一个文件例外，直接放在 `ports/` 目录下、
+不在 `ports/src/` 里。`"ports/*.S"` 这条 glob pattern 只能匹配到后者，前面那九个文件全部没被
+`file(GLOB ...)` 收进 `TX_PORT_SOURCES`，自然也就没被编译、没被链接——这正好解释了
+`_tx_thread_schedule`/`_tx_thread_stack_build`/`_tx_timer_interrupt` 这几个 undefined reference。
+
+**修复**：给 `TX_PORT_SOURCES` 的 glob 再加一条 `"ports/src/*.S"`：
+
+```cmake
+file(GLOB TX_PORT_SOURCES "ports/src/*.c" "ports/src/*.S" "ports/*.S")
+```
+
+### 根因 4.2：`tx_initialize_low_level.S` 引用的符号名和本项目的启动文件/链接脚本对不上
+
+`tx_initialize_low_level.S` 是原封不动从 ThreadX 官方仓库
+`ports/cortex_m4/gnu/example_build/tx_initialize_low_level.S` 复制过来的——**这一步本身没有做
+错**，Cortex-M4/GNU 组合下 ThreadX 官方就只提供这一份模板文件。但这份文件是配合 **ThreadX 自己
+demo 工程那一套启动文件/链接脚本**写的，文件里直接 `.global` 引用了两个外部符号：
+
+```asm
+.global __RAM_segment_used_end__    @ 已使用 RAM 的结束地址，ThreadX 内存池从这里往后分配
+.global _vectors                    @ 中断向量表地址，用来设置 VTOR 寄存器、取复位栈指针
+```
+
+这两个符号名是 ThreadX 官方 demo 链接脚本里的命名习惯，而本项目用的是 STM32CubeMX/CubeIDE 生成
+的启动文件和链接脚本，同样的概念用的是不同的名字：
+
+- 向量表符号：本项目叫 `g_pfnVectors`（`core/src/startup_stm32f429xx.S`），不是 `_vectors`；
+- "已用 RAM 结束地址"：本项目的链接脚本 `cmake/STM32F429IGT6_FLASH.ld` 在 `._user_heap_stack`
+  段前面用 `PROVIDE(_end = .)` 暴露的是 `_end`/`end`，不是 `__RAM_segment_used_end__`。
+
+两边符号命名体系不一致，链接器自然找不到 `_vectors`/`__RAM_segment_used_end__` 的定义。**这是
+把 ThreadX 官方 example_build 模板文件搬进非 ThreadX-demo 工程骨架时的通用问题，不是复制粘贴的
+时候手滑了**——只要不是原封不动照搬 ThreadX 官方那一整套 demo 工程（含它自己的链接脚本/启动
+文件），移植时就一定要过一遍这个符号对齐的步骤。
+
+**修复**：不改 `middlewares/threadx/` 下的 ThreadX 官方源码，改成在链接脚本里加两行符号别名，
+让 `_vectors`/`__RAM_segment_used_end__` 指向本项目已有的符号（`cmake/STM32F429IGT6_FLASH.ld`，
+紧跟在 `._user_heap_stack` 段后面）：
+
+```ld
+  ._user_heap_stack :
+  {
+    . = ALIGN(8);
+    PROVIDE ( end = . );
+    PROVIDE ( _end = . );
+    . = . + _Min_Heap_Size;
+    . = . + _Min_Stack_Size;
+    . = ALIGN(8);
+  } >RAM
+
+  /* ThreadX 的 Cortex-M4/GNU example_build 版 tx_initialize_low_level.S 期望这两个符号名
+   * （来自 ThreadX 自己的 demo 链接脚本）；本项目改用别名指向 ST 生成的等价符号，而不是
+   * 手改 vendored 的 ThreadX 源文件。 */
+  __RAM_segment_used_end__ = _end;
+  _vectors = g_pfnVectors;
+```
+
+### 根因 4.3：`SysTick_Handler` 重复定义
+
+`core/src/stm32f4xx_it.c` 里一直留着一份空壳 `SysTick_Handler()`（`docx/TROUBLESHOOTING.md` 问
+题一修完之后，这个函数体只剩 `HAL_IncTick()`——后来 `stm32f4xx_hal_timebase_tim.c` 把 HAL tick
+换到 TIM6，SysTick 中断从此没再使能过，这份函数早就是死代码，`CLAUDE.md` 里也一直标注着"等
+ThreadX 有真实代码就该删掉"）。现在 `tx_initialize_low_level.S`（根因 4.2 里那份文件）自己也定
+义了一份 `SysTick_Handler`（用来驱动 `_tx_timer_interrupt`，即 ThreadX 的时基）。项目里所有模块
+都是 CMake OBJECT 库（详见"小结"一节），每个目标文件无条件进最终链接，不存在"归档按需抽取"那
+一层，所以这是一个硬性的 `multiple definition of 'SysTick_Handler'`，链接直接失败，不会像
+STATIC 库年代那样被弱符号悄悄"截胡"掉。
+
+**修复**：删掉 `core/src/stm32f4xx_it.c` 里 `SysTick_Handler()` 的函数体，以及
+`core/inc/stm32f4xx_it.h` 里对应的原型声明，改留一句注释说明现在由 ThreadX 端口提供。
+
+### 根因 4.4：`PendSV_Handler` 重复定义——只有修完 4.1 之后才会暴露出来
+
+按 4.1 补上 glob 之后，`ports/src/tx_thread_schedule.S` 才第一次真正参与链接，而这个文件里定义
+了 `PendSV_Handler`（ThreadX Cortex-M4 端口用 PendSV 异常做任务上下文切换）。`core/src/
+stm32f4xx_it.c` 里同样也一直留着一份空壳 `void PendSV_Handler(void) {}`。修复 4.1/4.2/4.3 之后
+重新编译，链接报的是新的一条错误：
+
+```
+multiple definition of `PendSV_Handler';
+  middlewares/threadx/CMakeFiles/threadx.dir/ports/src/tx_thread_schedule.S.obj:(.text+0x2c):
+  first defined here
+```
+
+这条错误在最初的报错信息里完全看不到——因为当时 `tx_thread_schedule.S` 根本没被链接进来（就
+是根因 4.1 本身），`PendSV_Handler` 的冲突要等 4.1 修好之后才第一次真正发生。**排查这类"多根因
+叠加"的问题时要有心理准备：修完一层暴露出下一层，不能指望第一次报错信息就是全貌，每修一处都要
+重新编译一次看看还有没有新错误，而不是一次性对着最初的报错列表把所有猜测的修复都写完再统一编
+译验证。**
+
+**修复**：和 4.3 同样处理——删掉 `core/src/stm32f4xx_it.c` 里 `PendSV_Handler()` 的函数体和
+`core/inc/stm32f4xx_it.h` 里的原型声明。顺手检查了 `SVC_Handler`/`DebugMon_Handler` 有没有被
+ThreadX 端口重新定义（`grep -rn "SVC_Handler\|DebugMon_Handler" middlewares/threadx/`），确认
+没有，所以这两个 `stm32f4xx_it.c` 里的空壳保留不动。
+
+### 验证方法
+
+四处都改完后，从头清理重建：
+
+```bash
+rm -rf build
+cmake -B build -G Ninja
+cmake --build build
+echo $?   # 0
+```
+
+用 `nm` 确认 `SysTick_Handler`/`PendSV_Handler` 现在解析到 ThreadX 端口内部的地址，而不是
+`Default_Handler`，且和 ThreadX 的调度器/时基符号落在同一片代码区间里：
+
+```bash
+arm-none-eabi-nm build/stm32f429_firmware.elf | grep -E \
+  " (SysTick_Handler|PendSV_Handler|Default_Handler|_tx_thread_schedule|_tx_timer_interrupt|g_pfnVectors)$"
+# 080001b0 T _tx_thread_schedule
+# 080002b0 T _tx_timer_interrupt
+# 08009288 T Default_Handler
+# 08000000 R g_pfnVectors
+# 080001dc T PendSV_Handler        <-- 落在 ThreadX 代码区间，不是 Default_Handler 地址
+# 080003d2 T SysTick_Handler       <-- 同上
+```
+
+并确认 `.elf`/`.hex`/`.bin` 三个产物都正常生成。
+
+### 举一反三
+
+- ThreadX 官方 `example_build` 目录下的端口初始化文件（`tx_initialize_low_level.S`），是设计给
+  ThreadX 自带 demo 工程用的，**内置了它自己的一套符号命名假设**（`_vectors`/
+  `__RAM_segment_used_end__`）。移植进任何用了别的厂商模板/工具生成的启动文件+链接脚本的工程
+  时，默认要做一次符号对齐（改链接脚本加别名，或者直接改这份文件里的符号名），不要以为编译期
+  报的 undefined reference 是自己哪一步操作错了。
+- 呼应"小结"一节最后那句预判——"`app/`、`middlewares/threadx/` 一旦有了真实代码，如果也出现
+  同一个符号多处定义的模式，大概率会重复踩到这个坑"：这次虽然踩坑的机制不是 STATIC 库年代那种
+  弱符号被截胡（当时已经切成 OBJECT 库了），但"同一个符号（`SysTick_Handler`、
+  `PendSV_Handler`）在 `core/` 和新移植进来的模块里各有一份定义"这个模式，和问题一、二完全同
+  构，只是 OBJECT 库把"静默选错"变成了"直接报错"，更容易发现，但仍然需要人工去把 `core/`
+  里那份预留的空壳删掉。以后再往这个工程里移植任何"接管某个中断向量"的第三方代码（不只是
+  RTOS），都要先搜一遍 `core/src/stm32f4xx_it.c` 里是不是已经有同名的空实现。
+- 排查多个报错混在一起的链接失败时，优先按"编译期 vs 链接期"、"undefined reference vs
+  multiple definition"分类，一类一类地假设根因、单独修、重新编译验证，而不要想当然地假设第一
+  次报错列表就是全部问题——就像本例的 4.4，只有修完 4.1 才会暴露出来。
+
+---
+
 ## 小结（问题一、二）：这个项目里"静态库 + 弱符号别名"是一个反复出现的坑
 
 问题一和问题二根因完全一样，只是出现在不同的模块（`core` 和 `bsp`）、覆盖的是不同的符号（`SysTick_Handler` 和 `rt_vsnprintf`）。触发条件都是：
@@ -358,3 +535,5 @@ RCC_OscInitStructure.PLL.PLLP = 2;
 `app/`、`middlewares/threadx/` 一旦有了真实代码，如果也出现"同一个符号多处定义（弱兜底 + 强覆盖）"的模式，大概率会重复踩到这个坑。当时的应对方式是把涉及到的静态库整体纳入根 `CMakeLists.txt` 的 `-Wl,--whole-archive` / `-Wl,--no-whole-archive` 范围——这只是"哪个模块中了就补哪个"的治标办法。
 
 **后续处理（2026-09-10）**：既然这几个模块库本来就只是用来组织源码、从没打算脱离这个工程单独分发复用，索性把 `app`/`bsp`/`threadx`/`drivers`/`core` 全部从 `add_library(... STATIC)` 改成了 `add_library(... OBJECT)`。OBJECT 库不会打包成 `.a` 归档，链接的时候每一个目标文件都会无条件进最终链接，没有"按需抽取"这一步，也就没有弱符号被截胡的空间——从根上把这一整类坑消除了，根 `CMakeLists.txt` 里的 `--whole-archive`/`--no-whole-archive` 也随之整段删除。改完用 `nm` 复查过 `SysTick_Handler`、`rt_vsnprintf`、`HAL_UART_MspInit` 三个符号，全部是独立地址的强符号，行为和之前一致。唯一的代价是这几个模块以后没法脱离本工程单独打包给别的项目用，但目前没有这个需求。
+
+**预判应验（2026-09-17）**：上面"`middlewares/threadx/` 一旦有了真实代码，大概率会重复踩到这个坑"的预判应验了，见**问题四**——只是因为已经切到 OBJECT 库，表现从"静默选错、结果不对但编译能过"变成了"直接 `multiple definition` 报错"，更容易发现，但根因模式（`core/` 里预留的空壳和新移植代码定义了同一个符号）完全一样，说明"新模块接进来时检查有没有跟 `core/` 撞符号"这条经验依然要靠人工留意，OBJECT 库只是把后果从"隐蔽"变成了"报错"，没有从根上消除"两边都定义了同一个符号"这件事本身。

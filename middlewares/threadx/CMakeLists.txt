@@ -2,7 +2,7 @@ add_library(threadx OBJECT)
 
 # 收集 ThreadX 内核通用源码与 Cortex-M4 GNU 汇编
 file(GLOB TX_COMMON_SOURCES "common/src/*.c")
-file(GLOB TX_PORT_SOURCES "ports/src/*.c" "ports/*.S")
+file(GLOB TX_PORT_SOURCES "ports/src/*.c" "ports/src/*.S" "ports/*.S")
 
 set(TX_SOURCES ${TX_COMMON_SOURCES} ${TX_PORT_SOURCES})
 if(NOT TX_SOURCES)

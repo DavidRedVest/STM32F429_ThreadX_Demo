@@ -121,30 +121,14 @@ void DebugMon_Handler(void)
 {
 }
 
-/**
-  * @brief  This function handles PendSVC exception.
-  * @param  None
-  * @retval None
-  */
-void PendSV_Handler(void)
-{
-}
+/* PendSV_Handler is intentionally not defined here: ThreadX's Cortex-M4 port
+ * (middlewares/threadx/ports/src/tx_thread_schedule.S) uses PendSV for thread
+ * context switching and provides its own PendSV_Handler. */
 
-/**
-  * @brief  This function handles SysTick Handler.
-  * @note   Dead code for now: stm32f4xx_hal_timebase_tim.c moved the HAL tick
-  *         to TIM6, so SysTick's interrupt is never enabled and this never
-  *         runs. ThreadX's own Cortex-M4 port defines its own SysTick_Handler
-  *         for the RTOS tick, so delete this one when middlewares/threadx
-  *         gets real sources — leaving both would be a duplicate-symbol link
-  *         error (OBJECT libraries no longer let a stray weak alias mask it).
-  * @param  None
-  * @retval None
-  */
-void SysTick_Handler(void)
-{
-  HAL_IncTick();
-}
+/* SysTick_Handler is intentionally not defined here: stm32f4xx_hal_timebase_tim.c
+ * moved the HAL tick to TIM6, and middlewares/threadx/ports/tx_initialize_low_level.S
+ * now provides ThreadX's own SysTick_Handler for the RTOS tick. Defining both would
+ * be a duplicate-symbol link error under this project's OBJECT-library setup. */
 
 /******************************************************************************/
 /*                 STM32F4xx Peripherals Interrupt Handlers                   */

@@ -4,11 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Bare-metal firmware template for an STM32F429 (Cortex-M4) target, intended to integrate the
-STM32F4xx HAL and Eclipse ThreadX (RTOS), built with CMake + Ninja and an `arm-none-eabi` GCC
-toolchain. `core/`, `drivers/`, `bsp/`, and `app/` all have real sources now; only
-`middlewares/threadx/` is still an empty stub (just a `CMakeLists.txt`, no ThreadX kernel/port
-sources yet) — see Architecture below.
+Bare-metal firmware template for an STM32F429 (Cortex-M4) target, integrating the STM32F4xx HAL
+and Eclipse ThreadX (RTOS), built with CMake + Ninja and an `arm-none-eabi` GCC toolchain.
+`core/`, `drivers/`, `bsp/`, and `app/` all have real sources; `middlewares/threadx/` now also has
+real sources (the vendored ThreadX kernel + Cortex-M4 GNU port), and `app/src/app.c` runs real
+ThreadX threads via `tx_kernel_enter()`/`tx_application_define()`. The build links successfully as
+of 2026-09-17 — see the "Resolved (2026-09-17)" entry under Build status for four ThreadX-porting
+link errors (a source-glob miss, an example-port symbol-name mismatch, and two duplicate-handler
+conflicts with `core/src/stm32f4xx_it.c`) that were hit and fixed getting there; read it before
+touching `middlewares/threadx/` or `core/src/stm32f4xx_it.c` again.
 
 ## Build
 
@@ -48,10 +52,73 @@ JLinkExe -CommandFile jlink.cfg
 
 Run this after a successful `cmake --build build` (the `.bin` path is relative to the repo root).
 
+### Compiler-standard pin on `bsp/src/usmart.c`
+
+`bsp/CMakeLists.txt` force-compiles just that one file with `-std=gnu17` (via
+`set_source_files_properties(... COMPILE_OPTIONS "-std=gnu17")`), overriding the project-wide
+default. `usmart.c` (a ported ALIENTEK "usmart" runtime function-invocation console — see
+Architecture below) calls arbitrary registered functions through an unprototyped `u32(*)()`
+function-pointer type, a classic K&R-style trick that is legal when an empty parameter list means
+"unspecified arguments" (true through C17/gnu17). GCC 15's default `-std=gnu23` instead treats
+`()` as `(void)`, turning every one of those calls into a hard "too many arguments" error. If you
+add a new file that leans on the same trick, either add a similar per-file override or give the
+function pointer an explicit variadic/typed prototype instead.
+
 ### Build status
 
+**Resolved (2026-09-17)**: the ThreadX integration landed in commit `9c8814b`
+("bug(): 没有编译通过") — `middlewares/threadx/` gained real ThreadX kernel (`common/`) and
+Cortex-M4 GNU port (`ports/`) sources, and `app/src/app.c` was rewritten to start ThreadX
+(`tx_kernel_enter()` at the end of `app_init()`, tasks created in `tx_application_define()`) — but
+`cmake -B build -G Ninja && cmake --build build` failed at the final link step with four
+independent root causes, found and fixed together:
+
+1. **`middlewares/threadx/CMakeLists.txt`'s glob missed most port `.S` files.** It globbed
+   `"ports/src/*.c" "ports/*.S"`, but every ThreadX Cortex-M4 port assembly file actually lives
+   under `ports/src/*.S` (`tx_thread_schedule.S`, `tx_thread_stack_build.S`,
+   `tx_thread_context_save.S`/`_restore.S`, `tx_thread_system_return.S`, `tx_timer_interrupt.S`,
+   `tx_thread_interrupt_control.S`/`_disable.S`/`_restore.S`, `tx_misra.S`) — only
+   `ports/tx_initialize_low_level.S` (which sits directly under `ports/`, not `ports/src/`) matched.
+   Confirmed via the link error: undefined references to `_tx_thread_schedule`,
+   `_tx_thread_stack_build`, and `_tx_timer_interrupt`. **Fix**: added `"ports/src/*.S"` as a third
+   glob pattern.
+2. **`tx_initialize_low_level.S` references symbol names this project's linker script/startup file
+   don't define.** This file is ThreadX's official `ports/cortex_m4/gnu/example_build` template —
+   copying it verbatim is correct, but it's written to pair with *ThreadX's own* example linker
+   script, which defines `_vectors` (vector table) and `__RAM_segment_used_end__` (first free RAM
+   address for `tx_application_define`). This project instead uses an ST/STM32CubeMX-generated
+   startup file and linker script, where those same concepts are named `g_pfnVectors`
+   (`core/src/startup_stm32f429xx.S`) and `_end`/`end` (`cmake/STM32F429IGT6_FLASH.ld`) — confirmed
+   via undefined references to both ThreadX-side names. This symbol-name mismatch is expected
+   whenever ThreadX's example port file is dropped into a non-ThreadX-demo project skeleton, not a
+   copy mistake. **Fix**: rather than hand-editing the vendored ThreadX file, added two alias
+   assignments to `cmake/STM32F429IGT6_FLASH.ld` right after `._user_heap_stack`:
+   `__RAM_segment_used_end__ = _end;` and `_vectors = g_pfnVectors;`.
+3. **`SysTick_Handler` was a duplicate-definition link error, exactly as flagged in the Architecture
+   note below.** `core/src/stm32f4xx_it.c` still strong-defined `SysTick_Handler()` (already noted
+   as dead code needing deletion once ThreadX supplied its own), and
+   `tx_initialize_low_level.S` supplies ThreadX's own `SysTick_Handler`. Under the OBJECT-library
+   setup both object files land in the final link unconditionally, so this was a hard
+   `multiple definition of 'SysTick_Handler'` error, not a silent weak-shadowing bug. **Fix**:
+   deleted the `SysTick_Handler()` body from `core/src/stm32f4xx_it.c` and its prototype from
+   `core/inc/stm32f4xx_it.h`.
+4. **`PendSV_Handler` was the same duplicate-definition problem, one level deeper.** Fixing #1
+   above pulled in `middlewares/threadx/ports/src/tx_thread_schedule.S`, which defines
+   `PendSV_Handler` for ThreadX's Cortex-M4 thread context-switch mechanism — colliding with the
+   empty `void PendSV_Handler(void) {}` stub in `core/src/stm32f4xx_it.c`. This one only surfaces
+   *after* #1 is fixed (the port source has to actually be linked in to collide), so it wasn't
+   visible in the original error output. **Fix**: same pattern as #3 — deleted the body from
+   `stm32f4xx_it.c` and the prototype from `stm32f4xx_it.h`. `SVC_Handler` and `DebugMon_Handler`
+   were checked and are *not* redefined anywhere in the ThreadX port, so they were left alone.
+
+Verified: `cmake -B build -G Ninja && cmake --build build` now exits 0 and produces
+`stm32f429_firmware.elf/.hex/.bin`. `arm-none-eabi-nm build/stm32f429_firmware.elf | grep -E
+"SysTick_Handler|PendSV_Handler"` shows both resolving to addresses inside the ThreadX port's code
+range, distinct from `Default_Handler`.
+
 As of 2026-09-10, verified against a real `arm-none-eabi-gcc` 15.3.1 + CMake 4.4.3 + Ninja 1.13.2
-toolchain:
+toolchain (all three items below were true *before* the ThreadX integration above; they are not
+retested by the current build failure since it never reaches a successful link):
 
 - All prior naming/typo bugs are fixed (mismatched `stm32_muc_flags`/`stm32_mcu_flags`,
   `threasx`/`threadx`, `bap`/`bsp`, `Src`/`Inc` case mismatches, `middleeares` typo,
@@ -68,11 +135,13 @@ toolchain:
   cycle).
 - `app/`'s and `middlewares/threadx`'s `CMakeLists.txt` guard their `file(GLOB ...)` with
   `if(NOT <SOURCES>)` and fall back to writing an empty stub `.c` into the build dir — modern CMake
-  refuses `add_library(... OBJECT)`/`add_executable(...)` with zero sources. `app/` now has real
-  sources (`app.c`) so its stub branch is dead/skipped; `middlewares/threadx` still has none, so it
-  still falls back. The root executable target has the same problem for the same reason (all its
-  code comes from the linked OBJECT libs) and gets a generated `exe_stub.c` the same way, plus an
-  explicit
+  refuses `add_library(... OBJECT)`/`add_executable(...)` with zero sources. `app/`'s and
+  `middlewares/threadx`'s stub branches were both dead/skipped as of 2026-09-10 (`app/` had
+  `app.c`; `middlewares/threadx` was still empty at that point and fell back to the stub). As of
+  2026-09-17 `middlewares/threadx` also has real sources, so both stub branches are now dead — the
+  `if(NOT <SOURCES>)` guards are effectively vestigial unless a module is emptied out again. The
+  root executable target has the same problem for the same reason (all its code comes from the
+  linked OBJECT libs) and gets a generated `exe_stub.c` the same way, plus an explicit
   `LINKER_LANGUAGE C` since a sourceless target can't infer one.
 
 **Resolved (2026-09-10, superseded)**: `SysTick_Handler` (and every other real handler in
@@ -124,10 +193,11 @@ vendoring that file, the include was dropped from `stm32f4xx_hal_def.h`. Greppin
 header (`PHY_READ_TO`/`PHY_WRITE_TO`); it's excluded from `drivers/CMakeLists.txt`'s source list
 via `list(REMOVE_ITEM ...)` since Ethernet isn't currently used. To re-enable Ethernet: drop
 `list(REMOVE_ITEM HAL_SOURCES ".../stm32f4xx_hal_eth.c")` from `drivers/CMakeLists.txt` and either
-restore the real `Legacy/stm32_hal_legacy.h` or define `PHY_READ_TO`/`PHY_WRITE_TO` yourself. Full
-`cmake -B build -G Ninja && cmake --build build` now succeeds end-to-end and produces
-`stm32f429_firmware.elf/.hex/.bin` (HAL + `bsp`'s LED/UART code + `app`'s init/task functions +
-an empty `threadx` stub).
+restore the real `Legacy/stm32_hal_legacy.h` or define `PHY_READ_TO`/`PHY_WRITE_TO` yourself. As of
+2026-09-10, `cmake -B build -G Ninja && cmake --build build` succeeded end-to-end and produced
+`stm32f429_firmware.elf/.hex/.bin` (HAL + `bsp`'s LED/UART code + `app`'s init/task functions + an
+empty `threadx` stub) — real ThreadX sources landed afterward and broke that build for a while (see
+the "Resolved (2026-09-17)" entry above), but the build links successfully again as of 2026-09-17.
 
 Toolchain note: `arm-none-eabi-gcc` on this dev machine is unpacked at a custom path
 (`~/home/tools/arm-gnu-toolchain-*/bin`), not on `PATH` by default — add it to your shell profile
@@ -168,20 +238,59 @@ Layer responsibilities (intended, per the module layout):
   the vendor "Templates" style entry point and IRQ handlers. Also owns
   `stm32f4xx_hal_timebase_tim.c`, which overrides `HAL_InitTick()`/`HAL_SuspendTick()`/
   `HAL_ResumeTick()` to drive `uwTick` (and therefore `HAL_Delay()`) from TIM6 instead of SysTick —
-  done in anticipation of ThreadX's own Cortex-M4 port claiming SysTick for the RTOS tick once
-  `middlewares/threadx` gets real sources. `stm32f4xx_it.c`'s `SysTick_Handler()` is dead code
-  right now (SysTick's interrupt is never enabled) and needs to be deleted once ThreadX supplies
-  its own — leaving both would be a duplicate-symbol link error under the OBJECT-library setup.
-- `bsp/` — board support layer, sits on top of `drivers`: `bsp_led.{c,h}` (GPIOB PB0/PB1 output-pin
-  wrapper) and `bsp_uart.{c,h}` (USART1 PA9/PA10 init + RX IRQ), plus a ported subset of
-  RT-Thread's `kservice.c`/`rt_vsnprintf.c` (`rtthread.h`) for `rt_kprintf()`-style formatted UART
-  output — see `docx/TROUBLESHOOTING.md` for the porting bugs found along the way.
-- `middlewares/threadx/` — intended to hold the ThreadX kernel (`common/`) and Cortex-M4 GNU port
-  (`ports/cortex_m4/gnu/`) sources, referencing `tx_user.h` from `core/inc` (currently empty).
-- `app/` — application/business logic, depends on `bsp` and `threadx`. `app.c` exposes `app_init()`
-  (one-time setup: LED + UART init, demo `rt_kprintf` calls) and `app_task()` (the LED toggle +
-  `HAL_Delay(500)` body of `core/src/main.c`'s main loop) — `app_task()` is written so it can later
-  become a ThreadX thread entry function's loop body with minimal changes.
+  done in anticipation of ThreadX's own Cortex-M4 port claiming SysTick for the RTOS tick now that
+  `middlewares/threadx` has real sources. `stm32f4xx_it.c` no longer defines `SysTick_Handler()` or
+  `PendSV_Handler()` — both are now supplied by ThreadX's port
+  (`middlewares/threadx/ports/tx_initialize_low_level.S` and `.../ports/src/tx_thread_schedule.S`
+  respectively); leaving the old stubs in place was a `multiple definition` link error under the
+  OBJECT-library setup, fixed in the "Resolved (2026-09-17)" entry under Build status.
+- `bsp/` — board support layer, sits on top of `drivers`:
+  - `bsp_led.{c,h}` (GPIOB PB0/PB1 output-pin wrapper).
+  - `bsp_uart.{c,h}` (USART1 PA9/PA10 init + hand-written `USART1_IRQHandler` RX-into-line-buffer
+    logic, not `HAL_UART_Receive_IT`), plus a ported subset of RT-Thread's
+    `kservice.c`/`rt_vsnprintf.c` (`rtthread.h`) for `rt_kprintf()`-style formatted UART output.
+  - `bsp_key.{c,h}` — ALIENTEK-style debounced key/button driver (`KID_KEY0..2`/`KID_KEYUP`,
+    down/up/long-press events into a FIFO). Scanned every 10 ms from its *own* dedicated **TIM7**
+    interrupt (`bsp_KeyTimerInit()`), deliberately not sharing `core`'s TIM6 HAL timebase: TIM6
+    starts ticking from `HAL_Init()`, well before `app_init()`'s `bsp_InitKey()` has set up the key
+    state/GPIOs, so reusing it would scan uninitialized state. `TIM7_IRQHandler` also does its own
+    flag read/clear instead of going through the shared weak `HAL_TIM_PeriodElapsedCallback` —
+    `core`'s TIM6 timebase already provides a strong definition of that callback, and under the
+    OBJECT-library setup a second strong definition would be a duplicate-symbol link error (the
+    same class of pitfall as the weak-shadowing bugs below, just avoided this time instead of hit).
+  - `usmart.{c,h}`/`usmart_str.{c,h}` — a ported ALIENTEK "usmart" runtime console: register a C
+    function's pointer + a string prototype in a table (see `app/src/usmart_config.c`) and invoke
+    it by name/args over UART. `usmart_dev.init()` is called from `app_init()` and `USART1_IRQHandler`
+    fills the line buffer it reads from, but nothing in `app_task()` currently calls
+    `usmart_dev.scan()`/`.exe()` — the console is wired for RX but not yet pumped by the main loop.
+    See the compiler-standard note under Build above for its build-flag quirk.
+  - See `docx/TROUBLESHOOTING.md` for the UART/`rt_kprintf` porting bugs found along the way.
+- `middlewares/threadx/` — the vendored ThreadX kernel (`common/{inc,src}`) and Cortex-M4 GNU port
+  (`ports/inc`, `ports/src/*.S`, plus `ports/tx_initialize_low_level.S`), with
+  `tx_user.h`/`tx_port.h` under `ports/inc` and a project `tx_user.h` referenced from `core/inc`.
+  `target_compile_definitions(threadx PUBLIC TX_INCLUDE_USER_DEFINE_FILE)` in
+  `middlewares/threadx/CMakeLists.txt` pulls that user config in. `tx_initialize_low_level.S` is
+  ThreadX's stock `ports/cortex_m4/gnu/example_build` file — copied verbatim, its `_vectors`/
+  `__RAM_segment_used_end__` references are resolved onto this project's `g_pfnVectors`/`_end` via
+  aliases added to `cmake/STM32F429IGT6_FLASH.ld`, rather than editing the vendored file. See the
+  "Resolved (2026-09-17)" entry under Build status for this and the other three build/link bugs hit
+  wiring this module in.
+- `app/` — application/business logic, depends on `bsp` and `threadx`. `app.c` calls real ThreadX
+  APIs (`#include "tx_api.h"`): `app_init()` does one-time board setup (LED + UART init,
+  `bsp_InitKey()`/`bsp_KeyTimerInit()`, `usmart_dev.init()`, demo `rt_kprintf` calls) and then never
+  returns — it ends by calling `tx_kernel_enter()`, so `core/src/main.c`'s `while (1) app_task();`
+  is only reached if ThreadX fails to start. ThreadX itself calls back into `app.c`'s
+  `tx_application_define()` to create the initial threads: `AppTaskStart` (priority 2, which in
+  turn creates the rest of the threads/mutex via `AppTaskCreate()`/`AppObjCreate()` and then sleeps
+  forever), `AppTaskStat`/`AppTaskIDLE` (CPU-usage statistics, priorities 30/31). `AppTaskCreate()`
+  adds `AppTaskLed` and `AppTaskKey` (both priority 3) — `AppTaskLed` does the old LED-toggle loop
+  via `tx_thread_sleep(500)` instead of `HAL_Delay`, `AppTaskKey` polls `bsp_GetKey()` in a
+  `tx_thread_sleep(5)` loop and prints key events through `App_Printf()` (a `tx_mutex`-guarded
+  wrapper around `rt_kprintf`, currently `#if 0`'d out/dead — see the body of `App_Printf()`).
+  `app_task()`/`app_led_test()`/`app_key_test()` (the pre-ThreadX bare-metal loop body, `app.h`)
+  are now dead code reachable only in the ThreadX-fails-to-start fallback path. `usmart_config.c` is
+  where callable functions (e.g. `led_set()`, `app.h`'s `led_set` wrapper around `bsp_led`) get
+  registered into usmart's name table.
 
 Toolchain file `cmake/arm-none-eabi.cmake` sets `CMAKE_SYSTEM_NAME Generic` and
 `CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY` (required for cross-compiling bare-metal — the

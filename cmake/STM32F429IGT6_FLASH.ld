@@ -196,6 +196,12 @@ SECTIONS
     . = ALIGN(8);
   } >RAM
 
+  /* ThreadX's Cortex-M4/GNU example_build tx_initialize_low_level.S expects these
+   * symbol names (from ThreadX's own demo linker script); alias them onto this
+   * project's ST-generated symbols instead of editing the vendored ThreadX file. */
+  __RAM_segment_used_end__ = _end;
+  _vectors = g_pfnVectors;
+
   /* Remove information from the compiler libraries */
   /DISCARD/ :
   {

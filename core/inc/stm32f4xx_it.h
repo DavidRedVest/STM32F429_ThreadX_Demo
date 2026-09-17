@@ -37,8 +37,9 @@ void BusFault_Handler(void);
 void UsageFault_Handler(void);
 void SVC_Handler(void);
 void DebugMon_Handler(void);
-void PendSV_Handler(void);
-void SysTick_Handler(void);
+/* PendSV_Handler is provided by middlewares/threadx/ports/src/tx_thread_schedule.S,
+ * and SysTick_Handler by middlewares/threadx/ports/tx_initialize_low_level.S —
+ * neither is defined in this module. See the notes in stm32f4xx_it.c. */
 
 #ifdef __cplusplus
 }
